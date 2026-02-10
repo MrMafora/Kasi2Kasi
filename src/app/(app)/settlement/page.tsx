@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Calculator, AlertTriangle, CheckCircle, Info } from "lucide-react";
-import { formatCurrency } from "@/lib/mock-data";
+import { formatCurrency } from "@/lib/types";
 
 export default function SettlementPage() {
   const [members, setMembers] = useState(10);

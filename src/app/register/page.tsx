@@ -4,12 +4,16 @@ import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, ArrowRight } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { signUp } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [step, setStep] = useState(1);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
@@ -18,12 +22,39 @@ export default function RegisterPage() {
     beneficiary: "",
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
+
     if (step === 1) {
+      if (!formData.name || !formData.email || !formData.password) {
+        setError("Please fill in all required fields");
+        return;
+      }
+      if (formData.password.length < 6) {
+        setError("Password must be at least 6 characters");
+        return;
+      }
       setStep(2);
     } else {
-      router.push("/dashboard");
+      setLoading(true);
+      try {
+        const { error } = await signUp(formData.email, formData.password, {
+          name: formData.name,
+          phone: formData.phone,
+          beneficiary: formData.beneficiary || undefined,
+        });
+
+        if (error) {
+          setError(error.message || "Failed to create account");
+        } else {
+          router.push("/dashboard");
+        }
+      } catch (err: any) {
+        setError("Something went wrong. Please try again.");
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -48,6 +79,13 @@ export default function RegisterPage() {
       {/* Form */}
       <div className="flex-1 flex items-start justify-center px-4 pb-10">
         <div className="w-full max-w-sm">
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <p className="text-sm text-red-600">{error}</p>
+            </div>
+          )}
+
           {step === 1 ? (
             <>
               <h1 className="text-2xl font-bold text-kasi-charcoal mb-2">Create your account</h1>
@@ -55,13 +93,14 @@ export default function RegisterPage() {
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Full Name</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Full Name *</label>
                   <input
                     type="text"
                     className="input-field"
                     placeholder="e.g. Thabo Molefe"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    required
                   />
                 </div>
 
@@ -77,25 +116,28 @@ export default function RegisterPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Email (optional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Email Address *</label>
                   <input
                     type="email"
                     className="input-field"
-                    placeholder="thabo@email.com"
+                    placeholder="you@example.com"
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    required
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Password *</label>
                   <div className="relative">
                     <input
                       type={showPassword ? "text" : "password"}
                       className="input-field pr-12"
-                      placeholder="Create a password"
+                      placeholder="Min 6 characters"
                       value={formData.password}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                      required
+                      minLength={6}
                     />
                     <button
                       type="button"
@@ -151,15 +193,19 @@ export default function RegisterPage() {
                 </div>
 
                 <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="btn-secondary flex-1"
-                  >
+                  <button type="button" onClick={() => setStep(1)} className="btn-secondary flex-1">
                     Back
                   </button>
-                  <button type="submit" className="btn-primary flex-1 flex items-center justify-center gap-2">
-                    Create Account
+                  <button
+                    type="submit"
+                    className="btn-primary flex-1 flex items-center justify-center gap-2"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      "Create Account"
+                    )}
                   </button>
                 </div>
               </form>
