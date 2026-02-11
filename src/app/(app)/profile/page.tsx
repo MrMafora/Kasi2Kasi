@@ -6,10 +6,10 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Shield, Award, ChevronRight,
-  LogOut, Settings, Heart, Clock
+  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { getMyGroups } from "@/lib/database";
+import { getMyGroups, updateProfile } from "@/lib/database";
 import {
   formatCurrency, getScoreColor, getScoreLabel,
 } from "@/lib/types";
@@ -17,10 +17,18 @@ import type { GroupWithDetails } from "@/lib/types";
 import LoadingSpinner from "@/components/LoadingSpinner";
 
 export default function ProfilePage() {
-  const { user, profile, loading: authLoading, signOut } = useAuth();
+  const { user, profile, loading: authLoading, signOut, refreshProfile } = useAuth();
   const router = useRouter();
   const [groups, setGroups] = useState<GroupWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Edit mode state
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editBeneficiary, setEditBeneficiary] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -36,6 +44,44 @@ export default function ProfilePage() {
     }
     if (!authLoading) loadData();
   }, [user, authLoading]);
+
+  const startEditing = () => {
+    setEditName(profile?.name || "");
+    setEditPhone(profile?.phone || "");
+    setEditBeneficiary(profile?.beneficiary_name || "");
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setSaveSuccess(false);
+  };
+
+  const handleSave = async () => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      const { error } = await updateProfile(user.id, {
+        name: editName,
+        phone: editPhone,
+        beneficiary_name: editBeneficiary || undefined,
+      });
+      if (error) {
+        alert(error.message || "Failed to update profile");
+      } else {
+        setSaveSuccess(true);
+        await refreshProfile();
+        setTimeout(() => {
+          setEditing(false);
+          setSaveSuccess(false);
+        }, 1500);
+      }
+    } catch {
+      alert("Failed to update profile");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -60,19 +106,85 @@ export default function ProfilePage() {
   return (
     <div className="max-w-lg mx-auto px-4 pt-12">
       {/* Profile Header */}
-      <div className="text-center mb-6">
+      <div className="text-center mb-6 relative">
+        {!editing && (
+          <button
+            onClick={startEditing}
+            className="absolute right-0 top-0 w-8 h-8 bg-kasi-green/10 rounded-lg flex items-center justify-center text-kasi-green hover:bg-kasi-green/20 transition-colors"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+        )}
+
         <div className="w-20 h-20 bg-kasi-green/10 rounded-full flex items-center justify-center mx-auto mb-3">
           <span className="text-kasi-green font-bold text-2xl">{profile?.avatar_initials || "?"}</span>
         </div>
-        <h1 className="text-xl font-bold text-kasi-charcoal">{profile?.name || "User"}</h1>
-        <p className="text-gray-500 text-sm">{profile?.phone || profile?.email || ""}</p>
-        <p className="text-gray-400 text-xs mt-1">
-          Member since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString("en-ZA") : ""}
-        </p>
+
+        {editing ? (
+          <div className="space-y-3 text-left">
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Full Name</label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="input-field text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Phone Number</label>
+              <input
+                type="tel"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                className="input-field text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Beneficiary Name</label>
+              <input
+                type="text"
+                value={editBeneficiary}
+                onChange={(e) => setEditBeneficiary(e.target.value)}
+                placeholder="Optional"
+                className="input-field text-sm"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={cancelEditing}
+                className="flex-1 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-center gap-1.5"
+              >
+                <X className="w-4 h-4" /> Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving || !editName.trim() || !editPhone.trim()}
+                className="flex-1 btn-primary text-sm flex items-center justify-center gap-1.5 disabled:opacity-60"
+              >
+                {saving ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : saveSuccess ? (
+                  <><Check className="w-4 h-4" /> Saved!</>
+                ) : (
+                  <><Save className="w-4 h-4" /> Save</>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h1 className="text-xl font-bold text-kasi-charcoal">{profile?.name || "User"}</h1>
+            <p className="text-gray-500 text-sm">{profile?.phone || profile?.email || ""}</p>
+            <p className="text-gray-400 text-xs mt-1">
+              Member since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString("en-ZA") : ""}
+            </p>
+          </>
+        )}
       </div>
 
       {/* Commitment Score Ring */}
-      {groups.length > 0 && (
+      {groups.length > 0 && !editing && (
         <div className="card mb-4">
           <div className="flex items-center gap-4">
             <div className="relative w-20 h-20 flex-shrink-0">
@@ -105,50 +217,52 @@ export default function ProfilePage() {
       )}
 
       {/* Financial Passport */}
-      <div className="card mb-4">
-        <div className="flex items-center gap-2 mb-4">
-          <Award className="w-5 h-5 text-kasi-gold" />
-          <h2 className="font-semibold text-kasi-charcoal">Financial Passport</h2>
-        </div>
-
-        <div className="bg-gradient-to-br from-kasi-charcoal to-kasi-slate rounded-2xl p-5 text-white">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <Image src="/icons/logo.png" alt="K2K" width={32} height={32} className="rounded-lg" />
-              <span className="font-semibold text-sm">Kasi2Kasi</span>
-            </div>
-            <Shield className="w-5 h-5 text-kasi-gold" />
+      {!editing && (
+        <div className="card mb-4">
+          <div className="flex items-center gap-2 mb-4">
+            <Award className="w-5 h-5 text-kasi-gold" />
+            <h2 className="font-semibold text-kasi-charcoal">Financial Passport</h2>
           </div>
 
-          <p className="text-white/60 text-xs mb-1">Total Orchestrated</p>
-          <p className="text-2xl font-bold mb-4">{formatCurrency(totalContributed + totalReceived)}</p>
+          <div className="bg-gradient-to-br from-kasi-charcoal to-kasi-slate rounded-2xl p-5 text-white">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <Image src="/icons/logo.png" alt="K2K" width={32} height={32} className="rounded-lg" />
+                <span className="font-semibold text-sm">Kasi2Kasi</span>
+              </div>
+              <Shield className="w-5 h-5 text-kasi-gold" />
+            </div>
 
-          <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/10">
-            <div>
-              <p className="text-white/50 text-[10px]">Contributed</p>
-              <p className="font-semibold text-sm">{formatCurrency(totalContributed)}</p>
-            </div>
-            <div>
-              <p className="text-white/50 text-[10px]">Received</p>
-              <p className="font-semibold text-sm text-kasi-gold">{formatCurrency(totalReceived)}</p>
-            </div>
-            <div>
-              <p className="text-white/50 text-[10px]">Cycles</p>
-              <p className="font-semibold text-sm">{totalCycles}</p>
+            <p className="text-white/60 text-xs mb-1">Total Orchestrated</p>
+            <p className="text-2xl font-bold mb-4">{formatCurrency(totalContributed + totalReceived)}</p>
+
+            <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/10">
+              <div>
+                <p className="text-white/50 text-[10px]">Contributed</p>
+                <p className="font-semibold text-sm">{formatCurrency(totalContributed)}</p>
+              </div>
+              <div>
+                <p className="text-white/50 text-[10px]">Received</p>
+                <p className="font-semibold text-sm text-kasi-gold">{formatCurrency(totalReceived)}</p>
+              </div>
+              <div>
+                <p className="text-white/50 text-[10px]">Cycles</p>
+                <p className="font-semibold text-sm">{totalCycles}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        {groups.length > 0 && (
-          <p className="text-xs text-gray-400 text-center mt-3">
-            You have successfully completed {totalCycles} cycle{totalCycles !== 1 ? "s" : ""} and orchestrated{" "}
-            {formatCurrency(totalContributed + totalReceived)} through your Kasi2Kasi Stokvels.
-          </p>
-        )}
-      </div>
+          {groups.length > 0 && (
+            <p className="text-xs text-gray-400 text-center mt-3">
+              You have successfully completed {totalCycles} cycle{totalCycles !== 1 ? "s" : ""} and orchestrated{" "}
+              {formatCurrency(totalContributed + totalReceived)} through your Kasi2Kasi Stokvels.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Stokvel Memberships */}
-      {groups.length > 0 && (
+      {groups.length > 0 && !editing && (
         <div className="card mb-4">
           <h3 className="font-semibold text-sm text-kasi-charcoal mb-3">My Memberships</h3>
           <div className="space-y-2">
@@ -177,42 +291,50 @@ export default function ProfilePage() {
       )}
 
       {/* Beneficiary */}
-      <div className="card mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Heart className="w-4 h-4 text-rose-500" />
-          <h3 className="font-semibold text-sm text-kasi-charcoal">Beneficiary</h3>
+      {!editing && (
+        <div className="card mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Heart className="w-4 h-4 text-rose-500" />
+            <h3 className="font-semibold text-sm text-kasi-charcoal">Beneficiary</h3>
+          </div>
+          <p className="text-sm text-gray-600">
+            {profile?.beneficiary_name || "No beneficiary set"}
+          </p>
         </div>
-        <p className="text-sm text-gray-600">
-          {profile?.beneficiary_name || "No beneficiary set"}
-        </p>
-      </div>
+      )}
 
       {/* Settings */}
-      <div className="card mb-4 space-y-1">
-        {[
-          { icon: <Settings className="w-4 h-4" />, label: "Account Settings" },
-          { icon: <Shield className="w-4 h-4" />, label: "Privacy & Security" },
-          { icon: <Clock className="w-4 h-4" />, label: "Payment History" },
-        ].map((item, i) => (
+      {!editing && (
+        <div className="card mb-4 space-y-1">
           <button
-            key={i}
+            onClick={startEditing}
             className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
           >
-            <span className="text-gray-400">{item.icon}</span>
-            <span className="text-sm font-medium text-kasi-charcoal flex-1">{item.label}</span>
+            <span className="text-gray-400"><Settings className="w-4 h-4" /></span>
+            <span className="text-sm font-medium text-kasi-charcoal flex-1">Account Settings</span>
             <ChevronRight className="w-4 h-4 text-gray-300" />
           </button>
-        ))}
-      </div>
+          <Link
+            href="/settlement"
+            className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
+          >
+            <span className="text-gray-400"><Clock className="w-4 h-4" /></span>
+            <span className="text-sm font-medium text-kasi-charcoal flex-1">Settlement Calculator</span>
+            <ChevronRight className="w-4 h-4 text-gray-300" />
+          </Link>
+        </div>
+      )}
 
       {/* Logout */}
-      <button
-        onClick={handleSignOut}
-        className="flex items-center justify-center gap-2 text-red-500 font-medium text-sm py-4 w-full"
-      >
-        <LogOut className="w-4 h-4" />
-        Sign Out
-      </button>
+      {!editing && (
+        <button
+          onClick={handleSignOut}
+          className="flex items-center justify-center gap-2 text-red-500 font-medium text-sm py-4 w-full"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+      )}
     </div>
   );
 }

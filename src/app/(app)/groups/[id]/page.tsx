@@ -6,12 +6,15 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft, Users, BarChart3, Vote, Crown,
   Shield, BookOpen, CheckCircle, XCircle, Clock, AlertTriangle,
-  ChevronRight, UserPlus, Share2
+  ChevronRight, UserPlus, Share2, Plus, Send, Copy, Check, Banknote
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   getGroupById, getGroupTransactions, getConstitutionRules,
-  getRuleAcceptances, getGroupVotes, castVote as castVoteDb
+  getRuleAcceptances, getGroupVotes, castVote as castVoteDb,
+  recordContribution, createVote as createVoteDb,
+  addConstitutionRule, acceptRule as acceptRuleDb,
+  processPayout, notifyGroupMembers
 } from "@/lib/database";
 import {
   formatCurrency, getScoreColor, getRoleBadgeColor
@@ -23,7 +26,7 @@ type Tab = "ledger" | "members" | "constitution" | "votes";
 
 export default function GroupDetailPage() {
   const params = useParams();
-  const { user, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>("ledger");
   const [group, setGroup] = useState<GroupWithDetails | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -31,6 +34,33 @@ export default function GroupDetailPage() {
   const [ruleAcceptances, setRuleAcceptances] = useState<Record<string, string[]>>({});
   const [votes, setVotes] = useState<VoteType[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Contribution modal state
+  const [showContributeModal, setShowContributeModal] = useState(false);
+  const [contributionNote, setContributionNote] = useState("");
+  const [contributionSubmitting, setContributionSubmitting] = useState(false);
+  const [contributionSuccess, setContributionSuccess] = useState(false);
+
+  // Create vote modal state
+  const [showCreateVoteModal, setShowCreateVoteModal] = useState(false);
+  const [voteTitle, setVoteTitle] = useState("");
+  const [voteDescription, setVoteDescription] = useState("");
+  const [voteType, setVoteType] = useState<"general" | "role_change" | "rule_change" | "member_exit">("general");
+  const [voteSubmitting, setVoteSubmitting] = useState(false);
+
+  // Add rule state
+  const [showAddRuleModal, setShowAddRuleModal] = useState(false);
+  const [ruleTitle, setRuleTitle] = useState("");
+  const [ruleDescription, setRuleDescription] = useState("");
+  const [ruleSubmitting, setRuleSubmitting] = useState(false);
+
+  // Share state
+  const [copied, setCopied] = useState(false);
+
+  // Payout modal state
+  const [showPayoutModal, setShowPayoutModal] = useState(false);
+  const [payoutSubmitting, setPayoutSubmitting] = useState(false);
+  const [payoutSuccess, setPayoutSuccess] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -62,15 +92,214 @@ export default function GroupDetailPage() {
     if (!authLoading) loadData();
   }, [params.id, authLoading]);
 
+  const refreshData = async () => {
+    if (!group) return;
+    const [txData, rulesData, votesData, updatedGroup] = await Promise.all([
+      getGroupTransactions(group.id),
+      getConstitutionRules(group.id),
+      getGroupVotes(group.id),
+      getGroupById(group.id),
+    ]);
+    setTransactions(txData);
+    setRules(rulesData);
+    setVotes(votesData);
+    if (updatedGroup) setGroup(updatedGroup);
+    if (rulesData.length > 0) {
+      const acceptances = await getRuleAcceptances(rulesData.map((r) => r.id));
+      setRuleAcceptances(acceptances);
+    }
+  };
+
   const handleVote = async (voteId: string, value: "for" | "against") => {
     if (!user) return;
     await castVoteDb(voteId, user.id, value);
-    // Refresh votes
     if (group) {
       const votesData = await getGroupVotes(group.id);
       setVotes(votesData);
     }
   };
+
+  const handleContribute = async () => {
+    if (!user || !group) return;
+    setContributionSubmitting(true);
+    try {
+      const { error } = await recordContribution({
+        group_id: group.id,
+        member_id: user.id,
+        amount: group.contribution_amount,
+        round: group.current_round,
+        note: contributionNote || undefined,
+      });
+      if (error) {
+        alert(error.message || "Failed to record contribution");
+      } else {
+        setContributionSuccess(true);
+        setContributionNote("");
+        // Notify group members
+        await notifyGroupMembers(
+          group.id,
+          "Contribution Received",
+          `${profile?.name || "A member"} contributed ${formatCurrency(group.contribution_amount)} for Round ${group.current_round}`,
+          "payment",
+          user.id
+        );
+        await refreshData();
+        setTimeout(() => {
+          setShowContributeModal(false);
+          setContributionSuccess(false);
+        }, 2000);
+      }
+    } catch {
+      alert("Failed to record contribution");
+    } finally {
+      setContributionSubmitting(false);
+    }
+  };
+
+  const handleCreateVote = async () => {
+    if (!user || !group) return;
+    setVoteSubmitting(true);
+    try {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 day voting window
+      const { error } = await createVoteDb({
+        group_id: group.id,
+        title: voteTitle,
+        description: voteDescription,
+        proposed_by: user.id,
+        type: voteType,
+        expires_at: expiresAt.toISOString(),
+      });
+      if (error) {
+        alert(error.message || "Failed to create vote");
+      } else {
+        // Notify group members about new vote
+        await notifyGroupMembers(
+          group.id,
+          "New Proposal",
+          `${profile?.name || "A member"} proposed: "${voteTitle}"`,
+          "vote",
+          user.id
+        );
+        setVoteTitle("");
+        setVoteDescription("");
+        setVoteType("general");
+        setShowCreateVoteModal(false);
+        await refreshData();
+      }
+    } catch {
+      alert("Failed to create vote");
+    } finally {
+      setVoteSubmitting(false);
+    }
+  };
+
+  const handleAddRule = async () => {
+    if (!group) return;
+    setRuleSubmitting(true);
+    try {
+      const { error } = await addConstitutionRule(
+        group.id,
+        ruleTitle,
+        ruleDescription,
+        rules.length + 1
+      );
+      if (error) {
+        alert(error.message || "Failed to add rule");
+      } else {
+        setRuleTitle("");
+        setRuleDescription("");
+        setShowAddRuleModal(false);
+        await refreshData();
+      }
+    } catch {
+      alert("Failed to add rule");
+    } finally {
+      setRuleSubmitting(false);
+    }
+  };
+
+  const handleAcceptRule = async (ruleId: string) => {
+    if (!user) return;
+    const { error } = await acceptRuleDb(ruleId, user.id);
+    if (!error) {
+      await refreshData();
+    }
+  };
+
+  const handleShare = async () => {
+    const inviteUrl = `${window.location.origin}/groups/${group?.id}/join`;
+    const shareData = {
+      title: `Join ${group?.name} on Kasi2Kasi`,
+      text: `Join my Stokvel "${group?.name}" on Kasi2Kasi! Contribute ${formatCurrency(group?.contribution_amount || 0)} ${group?.frequency}.`,
+      url: inviteUrl,
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch {
+        // User cancelled share
+      }
+    } else {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handlePayout = async () => {
+    if (!user || !group) return;
+    const currentRecipient = payoutOrder.find((p) => p.isCurrent);
+    if (!currentRecipient) return;
+    setPayoutSubmitting(true);
+    try {
+      const { error } = await processPayout({
+        group_id: group.id,
+        recipient_id: currentRecipient.member.user_id,
+      });
+      if (error) {
+        alert(error.message || "Failed to process payout");
+      } else {
+        setPayoutSuccess(true);
+        const payoutAmount = group.contribution_amount * group.max_members;
+        // Notify all members about the payout
+        await notifyGroupMembers(
+          group.id,
+          "Payout Processed! 🎉",
+          `${currentRecipient.member.profile?.name || "A member"} received ${formatCurrency(payoutAmount)} for Round ${group.current_round}`,
+          "payout"
+        );
+        await refreshData();
+        setTimeout(() => {
+          setShowPayoutModal(false);
+          setPayoutSuccess(false);
+        }, 2500);
+      }
+    } catch {
+      alert("Failed to process payout");
+    } finally {
+      setPayoutSubmitting(false);
+    }
+  };
+
+  const isChairperson = group?.members.some(
+    (m) => m.user_id === user?.id && m.role === "chairperson"
+  );
+
+  const isChairOrTreasurer = group?.members.some(
+    (m) => m.user_id === user?.id && (m.role === "chairperson" || m.role === "treasurer")
+  );
+
+  const alreadyContributedThisRound = transactions.some(
+    (t) => t.type === "contribution" && t.round === group?.current_round && t.member_id === user?.id && t.status === "completed"
+  );
+
+  const roundContributionCount = transactions.filter(
+    (t) => t.type === "contribution" && t.round === group?.current_round && t.status === "completed"
+  ).length;
+
+  const allContributed = roundContributionCount >= (group?.member_count || 0);
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "ledger", label: "Ledger", icon: <BarChart3 className="w-4 h-4" /> },
@@ -113,8 +342,10 @@ export default function GroupDetailPage() {
   return (
     <div className="max-w-lg mx-auto">
       {/* Header */}
-      <div className="bg-kasi-green px-4 pt-10 pb-6 rounded-b-3xl">
-        <div className="flex items-center gap-3 mb-4">
+      <div className="gradient-green px-4 pt-10 pb-6 rounded-b-3xl relative overflow-hidden">
+        <div className="absolute -top-12 -right-12 w-40 h-40 bg-white/5 rounded-full blur-2xl" />
+        <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-kasi-gold/10 rounded-full blur-2xl" />
+        <div className="flex items-center gap-3 mb-4 relative z-10">
           <Link href="/groups" className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
             <ArrowLeft className="w-4 h-4 text-white" />
           </Link>
@@ -122,8 +353,11 @@ export default function GroupDetailPage() {
             <h1 className="text-white font-bold text-lg">{group.name}</h1>
             <p className="text-white/60 text-xs">{group.description}</p>
           </div>
-          <button className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
-            <Share2 className="w-4 h-4 text-white" />
+          <button
+            onClick={handleShare}
+            className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center"
+          >
+            {copied ? <Check className="w-4 h-4 text-kasi-gold" /> : <Share2 className="w-4 h-4 text-white" />}
           </button>
         </div>
 
@@ -150,11 +384,10 @@ export default function GroupDetailPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-medium transition-all ${
-                activeTab === tab.id
-                  ? "bg-kasi-green text-white shadow-sm"
-                  : "text-gray-500 hover:text-kasi-charcoal"
-              }`}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-medium transition-all ${activeTab === tab.id
+                ? "bg-kasi-green text-white shadow-sm"
+                : "text-gray-500 hover:text-kasi-charcoal"
+                }`}
             >
               {tab.icon}
               {tab.label}
@@ -168,6 +401,58 @@ export default function GroupDetailPage() {
         {/* ===== LEDGER TAB ===== */}
         {activeTab === "ledger" && (
           <>
+            {/* Record Contribution Button */}
+            {!alreadyContributedThisRound && (
+              <button
+                onClick={() => setShowContributeModal(true)}
+                className="btn-primary w-full flex items-center justify-center gap-2"
+              >
+                <Send className="w-4 h-4" />
+                Record Round {group.current_round} Contribution · {formatCurrency(group.contribution_amount)}
+              </button>
+            )}
+            {alreadyContributedThisRound && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                <p className="text-sm text-emerald-700 font-medium">
+                  Round {group.current_round} contribution recorded ✓
+                </p>
+              </div>
+            )}
+
+            {/* Payout Trigger — chairperson/treasurer only */}
+            {isChairOrTreasurer && (
+              <div className="card border border-kasi-gold/20 bg-kasi-gold/5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-kasi-charcoal">Process Payout</h4>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {roundContributionCount}/{group.member_count} members contributed this round
+                    </p>
+                  </div>
+                  <div className={`text-xs font-medium px-2 py-1 rounded-full ${allContributed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                    {allContributed ? "Ready" : "Waiting"}
+                  </div>
+                </div>
+                <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mb-3">
+                  <div
+                    className={`h-full rounded-full transition-all ${allContributed ? "bg-emerald-500" : "bg-amber-400"}`}
+                    style={{ width: `${group.member_count > 0 ? (roundContributionCount / group.member_count) * 100 : 0}%` }}
+                  />
+                </div>
+                <button
+                  onClick={() => setShowPayoutModal(true)}
+                  disabled={!allContributed}
+                  className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Banknote className="w-4 h-4" />
+                  {allContributed
+                    ? `Pay Out ${formatCurrency(group.contribution_amount * group.max_members)}`
+                    : `Waiting for ${group.member_count - roundContributionCount} more`}
+                </button>
+              </div>
+            )}
+
             <div className="card">
               <h3 className="font-semibold text-sm text-kasi-charcoal mb-4">Payout Rotation</h3>
               {payoutOrder.length === 0 ? (
@@ -177,15 +462,13 @@ export default function GroupDetailPage() {
                   {payoutOrder.map(({ member, round, isPaid, isCurrent }) => (
                     <div
                       key={member.user_id}
-                      className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
-                        isCurrent ? "bg-kasi-gold/10 border border-kasi-gold/20" : ""
-                      }`}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${isCurrent ? "bg-kasi-gold/10 border border-kasi-gold/20" : ""
+                        }`}
                     >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                        isPaid ? "bg-emerald-100 text-emerald-600" :
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${isPaid ? "bg-emerald-100 text-emerald-600" :
                         isCurrent ? "bg-kasi-gold/20 text-kasi-gold-dark" :
-                        "bg-gray-100 text-gray-400"
-                      }`}>
+                          "bg-gray-100 text-gray-400"
+                        }`}>
                         {round}
                       </div>
                       <div className="flex-1">
@@ -221,16 +504,15 @@ export default function GroupDetailPage() {
                 <div className="space-y-2">
                   {currentRoundTransactions.map((tx) => (
                     <div key={tx.id} className="flex items-center gap-3 py-2">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                        tx.status === "completed" ? "bg-emerald-50 text-emerald-600" :
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${tx.status === "completed" ? "bg-emerald-50 text-emerald-600" :
                         tx.status === "late" ? "bg-amber-50 text-amber-600" :
-                        tx.status === "pending" ? "bg-gray-100 text-gray-400" :
-                        "bg-red-50 text-red-600"
-                      }`}>
+                          tx.status === "pending" ? "bg-gray-100 text-gray-400" :
+                            "bg-red-50 text-red-600"
+                        }`}>
                         {tx.status === "completed" ? <CheckCircle className="w-4 h-4" /> :
-                         tx.status === "late" ? <AlertTriangle className="w-4 h-4" /> :
-                         tx.status === "pending" ? <Clock className="w-4 h-4" /> :
-                         <XCircle className="w-4 h-4" />}
+                          tx.status === "late" ? <AlertTriangle className="w-4 h-4" /> :
+                            tx.status === "pending" ? <Clock className="w-4 h-4" /> :
+                              <XCircle className="w-4 h-4" />}
                       </div>
                       <div className="flex-1">
                         <p className="text-sm font-medium text-kasi-charcoal">{tx.member_name}</p>
@@ -239,11 +521,10 @@ export default function GroupDetailPage() {
                           {tx.status === "late" && " · Late"}
                         </p>
                       </div>
-                      <span className={`text-sm font-semibold ${
-                        tx.status === "completed" ? "text-emerald-600" :
+                      <span className={`text-sm font-semibold ${tx.status === "completed" ? "text-emerald-600" :
                         tx.status === "late" ? "text-amber-600" :
-                        "text-gray-400"
-                      }`}>
+                          "text-gray-400"
+                        }`}>
                         {formatCurrency(tx.amount)}
                       </span>
                     </div>
@@ -278,7 +559,7 @@ export default function GroupDetailPage() {
               </div>
             )}
 
-            {transactions.length === 0 && (
+            {transactions.length === 0 && alreadyContributedThisRound === false && (
               <div className="card text-center py-8">
                 <BarChart3 className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-gray-400 text-sm">No transactions yet</p>
@@ -295,7 +576,10 @@ export default function GroupDetailPage() {
               <h3 className="font-semibold text-sm text-kasi-charcoal">
                 Members ({group.member_count}/{group.max_members})
               </h3>
-              <button className="text-xs text-kasi-green font-medium flex items-center gap-1">
+              <button
+                onClick={handleShare}
+                className="text-xs text-kasi-green font-medium flex items-center gap-1"
+              >
                 <UserPlus className="w-3.5 h-3.5" /> Invite
               </button>
             </div>
@@ -334,9 +618,19 @@ export default function GroupDetailPage() {
         {/* ===== CONSTITUTION TAB ===== */}
         {activeTab === "constitution" && (
           <div className="card">
-            <div className="flex items-center gap-2 mb-4">
-              <Shield className="w-5 h-5 text-kasi-green" />
-              <h3 className="font-semibold text-sm text-kasi-charcoal">Digital Constitution</h3>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-kasi-green" />
+                <h3 className="font-semibold text-sm text-kasi-charcoal">Digital Constitution</h3>
+              </div>
+              {isChairperson && (
+                <button
+                  onClick={() => setShowAddRuleModal(true)}
+                  className="text-xs text-kasi-green font-medium flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Rule
+                </button>
+              )}
             </div>
             <p className="text-xs text-gray-400 mb-4">
               All members must agree to these rules before joining. Changes require a majority vote.
@@ -345,26 +639,48 @@ export default function GroupDetailPage() {
               <div className="text-center py-8">
                 <BookOpen className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-gray-400 text-sm">No rules set yet</p>
-                <p className="text-gray-300 text-xs mt-1">The chairperson can add constitution rules</p>
+                <p className="text-gray-300 text-xs mt-1">
+                  {isChairperson ? "Tap \"Add Rule\" to create your group's constitution" : "The chairperson can add constitution rules"}
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
-                {rules.map((rule, i) => (
-                  <div key={rule.id} className="border border-gray-100 rounded-xl p-4">
-                    <div className="flex items-start gap-3">
-                      <span className="w-6 h-6 bg-kasi-green/10 rounded-lg flex items-center justify-center text-xs font-bold text-kasi-green flex-shrink-0">
-                        {i + 1}
-                      </span>
-                      <div className="flex-1">
-                        <h4 className="font-medium text-sm text-kasi-charcoal mb-1">{rule.title}</h4>
-                        <p className="text-xs text-gray-500 leading-relaxed">{rule.description}</p>
-                        <p className="text-[10px] text-gray-400 mt-2">
-                          ✓ Accepted by {(ruleAcceptances[rule.id] || []).length}/{group.member_count} members
-                        </p>
+                {rules.map((rule, i) => {
+                  const acceptedBy = ruleAcceptances[rule.id] || [];
+                  const hasAccepted = user ? acceptedBy.includes(user.id) : false;
+
+                  return (
+                    <div key={rule.id} className="border border-gray-100 rounded-xl p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="w-6 h-6 bg-kasi-green/10 rounded-lg flex items-center justify-center text-xs font-bold text-kasi-green flex-shrink-0">
+                          {i + 1}
+                        </span>
+                        <div className="flex-1">
+                          <h4 className="font-medium text-sm text-kasi-charcoal mb-1">{rule.title}</h4>
+                          <p className="text-xs text-gray-500 leading-relaxed">{rule.description}</p>
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="text-[10px] text-gray-400">
+                              ✓ Accepted by {acceptedBy.length}/{group.member_count} members
+                            </p>
+                            {!hasAccepted && user && (
+                              <button
+                                onClick={() => handleAcceptRule(rule.id)}
+                                className="text-[10px] text-kasi-green font-semibold flex items-center gap-0.5 hover:text-kasi-green-dark transition-colors"
+                              >
+                                <CheckCircle className="w-3 h-3" /> Accept
+                              </button>
+                            )}
+                            {hasAccepted && (
+                              <span className="text-[10px] text-emerald-500 font-medium flex items-center gap-0.5">
+                                <CheckCircle className="w-3 h-3" /> Accepted
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -373,11 +689,19 @@ export default function GroupDetailPage() {
         {/* ===== VOTES TAB ===== */}
         {activeTab === "votes" && (
           <>
+            {/* Create Vote Button */}
+            <button
+              onClick={() => setShowCreateVoteModal(true)}
+              className="btn-primary w-full flex items-center justify-center gap-2"
+            >
+              <Plus className="w-4 h-4" /> New Proposal
+            </button>
+
             {votes.length === 0 ? (
               <div className="card text-center py-8">
                 <Vote className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-gray-400 text-sm">No votes yet</p>
-                <p className="text-gray-300 text-xs mt-1">Proposals will appear here when submitted</p>
+                <p className="text-gray-300 text-xs mt-1">Create a proposal to start voting</p>
               </div>
             ) : (
               votes.map((vote) => {
@@ -442,6 +766,272 @@ export default function GroupDetailPage() {
           </>
         )}
       </div>
+
+      {/* ===== CONTRIBUTE MODAL ===== */}
+      {showContributeModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+            {contributionSuccess ? (
+              <div className="text-center py-6">
+                <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle className="w-8 h-8 text-emerald-500" />
+                </div>
+                <h3 className="font-bold text-lg text-kasi-charcoal">Contribution Recorded!</h3>
+                <p className="text-sm text-gray-500 mt-1">{formatCurrency(group.contribution_amount)} for Round {group.current_round}</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-lg text-kasi-charcoal">Record Contribution</h3>
+                  <button onClick={() => setShowContributeModal(false)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="bg-kasi-green/5 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Amount</p>
+                  <p className="text-2xl font-bold text-kasi-green">{formatCurrency(group.contribution_amount)}</p>
+                  <p className="text-xs text-gray-400 mt-1">Round {group.current_round} · {group.name}</p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Note (optional)</label>
+                  <input
+                    type="text"
+                    value={contributionNote}
+                    onChange={(e) => setContributionNote(e.target.value)}
+                    placeholder="e.g. EFT reference, payment method"
+                    className="input-field text-sm"
+                  />
+                </div>
+
+                <button
+                  onClick={handleContribute}
+                  disabled={contributionSubmitting}
+                  className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {contributionSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Recording...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" /> Confirm Contribution
+                    </>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== CREATE VOTE MODAL ===== */}
+      {showCreateVoteModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg text-kasi-charcoal">New Proposal</h3>
+              <button onClick={() => setShowCreateVoteModal(false)} className="text-gray-400 hover:text-gray-600">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Category</label>
+              <select
+                value={voteType}
+                onChange={(e) => setVoteType(e.target.value as any)}
+                className="input-field text-sm"
+              >
+                <option value="general">General</option>
+                <option value="role_change">Role Change</option>
+                <option value="rule_change">Rule Change</option>
+                <option value="member_exit">Member Exit</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Title</label>
+              <input
+                type="text"
+                value={voteTitle}
+                onChange={(e) => setVoteTitle(e.target.value)}
+                placeholder="What is being proposed?"
+                className="input-field text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Description</label>
+              <textarea
+                value={voteDescription}
+                onChange={(e) => setVoteDescription(e.target.value)}
+                placeholder="Explain why this change is needed..."
+                rows={3}
+                className="input-field text-sm resize-none"
+              />
+            </div>
+
+            <p className="text-[10px] text-gray-400">
+              Voting will be open for 7 days. A majority vote is required to pass.
+            </p>
+
+            <button
+              onClick={handleCreateVote}
+              disabled={voteSubmitting || !voteTitle.trim() || !voteDescription.trim()}
+              className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {voteSubmitting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                <>
+                  <Vote className="w-4 h-4" /> Submit Proposal
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== ADD RULE MODAL ===== */}
+      {showAddRuleModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg text-kasi-charcoal">Add Constitution Rule</h3>
+              <button onClick={() => setShowAddRuleModal(false)} className="text-gray-400 hover:text-gray-600">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Rule Title</label>
+              <input
+                type="text"
+                value={ruleTitle}
+                onChange={(e) => setRuleTitle(e.target.value)}
+                placeholder="e.g. Late Payment Penalty"
+                className="input-field text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Description</label>
+              <textarea
+                value={ruleDescription}
+                onChange={(e) => setRuleDescription(e.target.value)}
+                placeholder="Describe the rule in detail..."
+                rows={3}
+                className="input-field text-sm resize-none"
+              />
+            </div>
+
+            <button
+              onClick={handleAddRule}
+              disabled={ruleSubmitting || !ruleTitle.trim() || !ruleDescription.trim()}
+              className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {ruleSubmitting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <Shield className="w-4 h-4" /> Add Rule
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== PAYOUT CONFIRMATION MODAL ===== */}
+      {showPayoutModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+            {payoutSuccess ? (
+              <div className="text-center py-4">
+                <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <CheckCircle className="w-7 h-7 text-emerald-500" />
+                </div>
+                <h3 className="font-bold text-lg text-kasi-charcoal">Payout Processed!</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {formatCurrency(group.contribution_amount * group.max_members)} has been paid out.
+                  Round {group.current_round + 1} will begin.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-lg text-kasi-charcoal">Confirm Payout</h3>
+                  <button onClick={() => setShowPayoutModal(false)} className="text-gray-400 hover:text-gray-600">
+                    <XCircle className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="bg-kasi-gold/5 border border-kasi-gold/20 rounded-xl p-4 text-center">
+                  <p className="text-xs text-gray-500 mb-1">Payout Amount</p>
+                  <p className="text-3xl font-bold text-kasi-charcoal">
+                    {formatCurrency(group.contribution_amount * group.max_members)}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">Round {group.current_round}</p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <p className="text-xs text-gray-500 mb-2">Recipient</p>
+                  {(() => {
+                    const recipient = payoutOrder.find((p) => p.isCurrent);
+                    return recipient ? (
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-kasi-green/10 rounded-full flex items-center justify-center text-sm font-bold text-kasi-green">
+                          {recipient.round}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-kasi-charcoal">{recipient.member.profile?.name || "Member"}</p>
+                          <p className="text-xs text-gray-400">Position #{recipient.round} in rotation</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-400">No recipient found for this round</p>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowPayoutModal(false)}
+                    className="flex-1 py-3 rounded-xl font-medium text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePayout}
+                    disabled={payoutSubmitting}
+                    className="flex-1 btn-primary flex items-center justify-center gap-2 disabled:opacity-60"
+                  >
+                    {payoutSubmitting ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Banknote className="w-4 h-4" /> Confirm Payout
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

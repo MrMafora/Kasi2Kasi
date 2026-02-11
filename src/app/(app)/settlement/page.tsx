@@ -10,14 +10,15 @@ export default function SettlementPage() {
   const [payoutRound, setPayoutRound] = useState(3);
   const [exitRound, setExitRound] = useState(6);
   const [calculated, setCalculated] = useState(false);
+  const [validationError, setValidationError] = useState("");
 
   const totalPayout = members * contribution;
   const totalContributed = exitRound * contribution;
   const remainingRounds = members - exitRound;
   const remainingOwed = remainingRounds * contribution;
 
-  // If member already received payout
-  const hasReceivedPayout = payoutRound <= exitRound;
+  // payoutRound === 0 means "not yet paid"
+  const hasReceivedPayout = payoutRound > 0 && payoutRound <= exitRound;
   const netBalance = hasReceivedPayout
     ? totalContributed - totalPayout // Negative means they owe
     : totalContributed; // They haven't been paid yet
@@ -28,6 +29,21 @@ export default function SettlementPage() {
 
   const handleCalculate = (e: React.FormEvent) => {
     e.preventDefault();
+    setValidationError("");
+
+    if (exitRound < 1 || exitRound > members) {
+      setValidationError(`Exit round must be between 1 and ${members}`);
+      return;
+    }
+    if (payoutRound < 0 || payoutRound > members) {
+      setValidationError(`Payout round must be between 0 and ${members}`);
+      return;
+    }
+    if (payoutRound > 0 && payoutRound > exitRound) {
+      setValidationError("You can't receive a payout after your exit round");
+      return;
+    }
+
     setCalculated(true);
   };
 
@@ -100,6 +116,13 @@ export default function SettlementPage() {
             />
           </div>
 
+          {validationError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <p className="text-sm text-red-600">{validationError}</p>
+            </div>
+          )}
+
           <button type="submit" className="btn-primary w-full">
             Calculate Settlement
           </button>
@@ -151,8 +174,8 @@ export default function SettlementPage() {
                   {owesGroup
                     ? `You owe the group ${formatCurrency(amountOwed)}`
                     : groupOwesMember
-                    ? `The group owes you ${formatCurrency(totalContributed)}`
-                    : "Settlement is balanced"
+                      ? `The group owes you ${formatCurrency(totalContributed)}`
+                      : "Settlement is balanced"
                   }
                 </h3>
                 <p className="text-sm text-gray-600 mt-2 leading-relaxed">

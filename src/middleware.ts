@@ -39,8 +39,8 @@ export async function middleware(request: NextRequest) {
   });
 
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
   // Protected routes - redirect to login if not authenticated
   const protectedPaths = ["/dashboard", "/groups", "/notifications", "/settlement", "/profile"];
@@ -48,14 +48,14 @@ export async function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith(path)
   );
 
-  if (isProtected && !session) {
+  if (isProtected && !user) {
     const redirectUrl = new URL("/login", request.url);
     redirectUrl.searchParams.set("redirect", request.nextUrl.pathname);
     return NextResponse.redirect(redirectUrl);
   }
 
-  // If logged in user tries to access login/register, redirect to dashboard
-  if (session && (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/register")) {
+  // If logged in user tries to access login/register/forgot-password, redirect to dashboard
+  if (user && (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/register" || request.nextUrl.pathname === "/forgot-password")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

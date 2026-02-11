@@ -4,20 +4,24 @@ import type {
   Vote, VoteCast, Notification, Profile, GroupWithDetails,
 } from "@/lib/types";
 
-const supabase = createClient();
+function getSupabase() {
+  return createClient();
+}
 
 // ============ GROUPS ============
 
 export async function getMyGroups(userId: string): Promise<GroupWithDetails[]> {
+  const supabase = getSupabase();
+
   const { data: memberships } = await supabase
     .from("group_members")
-    .select("group_id, role, commitment_score, lifetime_contributed, lifetime_received, cycles_completed, total_on_time, total_payments, payout_position, status")
+    .select("group_id, role, commitment_score, lifetime_contributed, lifetime_received, cycles_completed, total_on_time, total_payments, payout_position, status, id, user_id, joined_at")
     .eq("user_id", userId)
     .eq("status", "active");
 
   if (!memberships || memberships.length === 0) return [];
 
-  const groupIds = memberships.map((m) => m.group_id);
+  const groupIds = memberships.map((m: { group_id: string }) => m.group_id);
 
   const { data: groups } = await supabase
     .from("groups")
@@ -26,31 +30,37 @@ export async function getMyGroups(userId: string): Promise<GroupWithDetails[]> {
 
   if (!groups) return [];
 
-  // Get member counts for each group
-  const result: GroupWithDetails[] = [];
+  // Batch: fetch all members for all groups in ONE query (fixes N+1)
+  const { data: allMembers } = await supabase
+    .from("group_members")
+    .select("*, profile:profiles(*)")
+    .in("group_id", groupIds)
+    .eq("status", "active")
+    .order("payout_position", { ascending: true });
 
-  for (const group of groups) {
-    const { data: members } = await supabase
-      .from("group_members")
-      .select("*, profile:profiles(*)")
-      .eq("group_id", group.id)
-      .eq("status", "active")
-      .order("payout_position", { ascending: true });
+  // Group members by group_id in memory
+  const membersByGroup: Record<string, any[]> = {};
+  (allMembers || []).forEach((member: { group_id: string }) => {
+    if (!membersByGroup[member.group_id]) membersByGroup[member.group_id] = [];
+    membersByGroup[member.group_id].push(member);
+  });
 
-    const myMembership = memberships.find((m) => m.group_id === group.id);
+  return groups.map((group: { id: string }) => {
+    const members = membersByGroup[group.id] || [];
+    const myMembership = memberships.find((m: { group_id: string }) => m.group_id === group.id);
 
-    result.push({
+    return {
       ...group,
-      members: members || [],
-      member_count: members?.length || 0,
-      my_membership: myMembership ? { ...myMembership, id: "", group_id: group.id, user_id: userId, joined_at: "" } as GroupMember : undefined,
-    });
-  }
-
-  return result;
+      members,
+      member_count: members.length,
+      my_membership: myMembership as GroupMember | undefined,
+    };
+  });
 }
 
 export async function getGroupById(groupId: string): Promise<GroupWithDetails | null> {
+  const supabase = getSupabase();
+
   const { data: group } = await supabase
     .from("groups")
     .select("*")
@@ -82,6 +92,7 @@ export async function createGroup(
     max_members: number;
   }
 ): Promise<{ group: StokvelGroup | null; error: any }> {
+  const supabase = getSupabase();
   const totalRounds = data.max_members;
 
   const { data: group, error } = await supabase
@@ -118,6 +129,8 @@ export async function createGroup(
 // ============ TRANSACTIONS ============
 
 export async function getGroupTransactions(groupId: string, round?: number): Promise<Transaction[]> {
+  const supabase = getSupabase();
+
   let query = supabase
     .from("transactions")
     .select("*, member:profiles!member_id(name)")
@@ -136,6 +149,47 @@ export async function getGroupTransactions(groupId: string, round?: number): Pro
   }));
 }
 
+// Records a contribution using the secure DB function (atomic: tx + stats + pool)
+export async function recordContribution(data: {
+  group_id: string;
+  member_id: string;
+  amount: number;
+  round: number;
+  note?: string;
+}): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  const { data: result, error } = await supabase.rpc("record_contribution", {
+    p_group_id: data.group_id,
+    p_member_id: data.member_id,
+    p_amount: data.amount,
+    p_round: data.round,
+    p_note: data.note || null,
+  });
+
+  if (error) return { error };
+  if (result?.error) return { error: { message: result.error } };
+  return { error: null };
+}
+
+// Process a payout using the secure DB function (atomic: tx + stats + round advance)
+export async function processPayout(data: {
+  group_id: string;
+  recipient_id: string;
+}): Promise<{ error: any; amount?: number }> {
+  const supabase = getSupabase();
+
+  const { data: result, error } = await supabase.rpc("process_payout", {
+    p_group_id: data.group_id,
+    p_recipient_id: data.recipient_id,
+  });
+
+  if (error) return { error };
+  if (result?.error) return { error: { message: result.error } };
+  return { error: null, amount: result?.amount };
+}
+
+// Legacy createTransaction for non-contribution types (penalty, settlement)
 export async function createTransaction(data: {
   group_id: string;
   member_id: string;
@@ -145,51 +199,28 @@ export async function createTransaction(data: {
   round: number;
   note?: string;
 }): Promise<{ error: any }> {
-  const { error } = await supabase.from("transactions").insert(data);
+  const supabase = getSupabase();
 
-  if (!error && data.type === "contribution" && data.status === "completed") {
-    // Update member stats
-    const { data: member } = await supabase
-      .from("group_members")
-      .select("lifetime_contributed, total_payments, total_on_time")
-      .eq("group_id", data.group_id)
-      .eq("user_id", data.member_id)
-      .single();
-
-    if (member) {
-      await supabase
-        .from("group_members")
-        .update({
-          lifetime_contributed: member.lifetime_contributed + data.amount,
-          total_payments: member.total_payments + 1,
-          total_on_time: member.total_on_time + 1,
-          commitment_score: Math.round(((member.total_on_time + 1) / (member.total_payments + 1)) * 100),
-        })
-        .eq("group_id", data.group_id)
-        .eq("user_id", data.member_id);
-    }
-
-    // Update group pool
-    const { data: g } = await supabase
-      .from("groups")
-      .select("total_pool")
-      .eq("id", data.group_id)
-      .single();
-
-    if (g) {
-      await supabase
-        .from("groups")
-        .update({ total_pool: (g.total_pool || 0) + data.amount })
-        .eq("id", data.group_id);
-    }
+  // For contributions, use the secure DB function
+  if (data.type === "contribution" && data.status === "completed") {
+    return recordContribution({
+      group_id: data.group_id,
+      member_id: data.member_id,
+      amount: data.amount,
+      round: data.round,
+      note: data.note,
+    });
   }
 
+  const { error } = await supabase.from("transactions").insert(data);
   return { error };
 }
 
 // ============ CONSTITUTION RULES ============
 
 export async function getConstitutionRules(groupId: string): Promise<ConstitutionRule[]> {
+  const supabase = getSupabase();
+
   const { data } = await supabase
     .from("constitution_rules")
     .select("*")
@@ -201,6 +232,7 @@ export async function getConstitutionRules(groupId: string): Promise<Constitutio
 
 export async function getRuleAcceptances(ruleIds: string[]): Promise<Record<string, string[]>> {
   if (ruleIds.length === 0) return {};
+  const supabase = getSupabase();
 
   const { data } = await supabase
     .from("rule_acceptances")
@@ -208,7 +240,7 @@ export async function getRuleAcceptances(ruleIds: string[]): Promise<Record<stri
     .in("rule_id", ruleIds);
 
   const result: Record<string, string[]> = {};
-  (data || []).forEach((a) => {
+  (data || []).forEach((a: { rule_id: string; user_id: string }) => {
     if (!result[a.rule_id]) result[a.rule_id] = [];
     result[a.rule_id].push(a.user_id);
   });
@@ -217,6 +249,7 @@ export async function getRuleAcceptances(ruleIds: string[]): Promise<Record<stri
 }
 
 export async function addConstitutionRule(groupId: string, title: string, description: string, order: number): Promise<{ error: any }> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("constitution_rules")
     .insert({ group_id: groupId, title, description, rule_order: order });
@@ -224,6 +257,7 @@ export async function addConstitutionRule(groupId: string, title: string, descri
 }
 
 export async function acceptRule(ruleId: string, userId: string): Promise<{ error: any }> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("rule_acceptances")
     .upsert({ rule_id: ruleId, user_id: userId });
@@ -233,6 +267,8 @@ export async function acceptRule(ruleId: string, userId: string): Promise<{ erro
 // ============ VOTES ============
 
 export async function getGroupVotes(groupId: string): Promise<Vote[]> {
+  const supabase = getSupabase();
+
   const { data: votes } = await supabase
     .from("votes")
     .select("*, proposer:profiles!proposed_by(name)")
@@ -241,19 +277,19 @@ export async function getGroupVotes(groupId: string): Promise<Vote[]> {
 
   if (!votes || votes.length === 0) return [];
 
-  const voteIds = votes.map((v) => v.id);
+  const voteIds = votes.map((v: any) => v.id);
   const { data: casts } = await supabase
     .from("vote_casts")
     .select("vote_id, user_id, vote_value")
     .in("vote_id", voteIds);
 
   return votes.map((v: any) => {
-    const voteCasts = (casts || []).filter((c) => c.vote_id === v.id);
+    const voteCasts = (casts || []).filter((c: { vote_id: string }) => c.vote_id === v.id);
     return {
       ...v,
       proposer_name: v.proposer?.name || "Unknown",
-      votes_for: voteCasts.filter((c) => c.vote_value === "for").map((c) => c.user_id),
-      votes_against: voteCasts.filter((c) => c.vote_value === "against").map((c) => c.user_id),
+      votes_for: voteCasts.filter((c: { vote_value: string }) => c.vote_value === "for").map((c: { user_id: string }) => c.user_id),
+      votes_against: voteCasts.filter((c: { vote_value: string }) => c.vote_value === "against").map((c: { user_id: string }) => c.user_id),
     };
   });
 }
@@ -266,11 +302,13 @@ export async function createVote(data: {
   type: "role_change" | "rule_change" | "member_exit" | "general";
   expires_at: string;
 }): Promise<{ error: any }> {
+  const supabase = getSupabase();
   const { error } = await supabase.from("votes").insert(data);
   return { error };
 }
 
 export async function castVote(voteId: string, userId: string, value: "for" | "against"): Promise<{ error: any }> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("vote_casts")
     .upsert({ vote_id: voteId, user_id: userId, vote_value: value });
@@ -280,6 +318,8 @@ export async function castVote(voteId: string, userId: string, value: "for" | "a
 // ============ NOTIFICATIONS ============
 
 export async function getNotifications(userId: string): Promise<Notification[]> {
+  const supabase = getSupabase();
+
   const { data } = await supabase
     .from("notifications")
     .select("*")
@@ -291,6 +331,7 @@ export async function getNotifications(userId: string): Promise<Notification[]> 
 }
 
 export async function markNotificationRead(notificationId: string): Promise<void> {
+  const supabase = getSupabase();
   await supabase
     .from("notifications")
     .update({ read: true })
@@ -298,6 +339,7 @@ export async function markNotificationRead(notificationId: string): Promise<void
 }
 
 export async function markAllNotificationsRead(userId: string): Promise<void> {
+  const supabase = getSupabase();
   await supabase
     .from("notifications")
     .update({ read: true })
@@ -312,15 +354,145 @@ export async function createNotification(data: {
   type: "payment" | "payout" | "vote" | "reminder" | "system";
   group_id?: string;
 }): Promise<void> {
+  const supabase = getSupabase();
   await supabase.from("notifications").insert(data);
 }
 
 // ============ PROFILE ============
 
 export async function updateProfile(userId: string, data: Partial<Profile>): Promise<{ error: any }> {
+  const supabase = getSupabase();
   const { error } = await supabase
     .from("profiles")
     .update(data)
     .eq("id", userId);
   return { error };
+}
+
+// ============ JOIN GROUP ============
+
+export async function getGroupPublicInfo(groupId: string): Promise<{
+  group: { id: string; name: string; description: string; contribution_amount: number; frequency: string; max_members: number; member_count: number; status: string } | null;
+  error: any;
+}> {
+  const supabase = getSupabase();
+
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .select("id, name, description, contribution_amount, frequency, max_members, status")
+    .eq("id", groupId)
+    .single();
+
+  if (groupError || !group) return { group: null, error: groupError };
+
+  const { count } = await supabase
+    .from("group_members")
+    .select("*", { count: "exact", head: true })
+    .eq("group_id", groupId)
+    .eq("status", "active");
+
+  return {
+    group: { ...group, member_count: count || 0 },
+    error: null,
+  };
+}
+
+export async function joinGroup(groupId: string, userId: string): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  // Check if already a member
+  const { data: existing } = await supabase
+    .from("group_members")
+    .select("id, status")
+    .eq("group_id", groupId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (existing && existing.status === "active") {
+    return { error: { message: "You are already a member of this group" } };
+  }
+
+  // Check group capacity
+  const { data: group } = await supabase
+    .from("groups")
+    .select("max_members, status")
+    .eq("id", groupId)
+    .single();
+
+  if (!group) return { error: { message: "Group not found" } };
+  if (group.status !== "active") return { error: { message: "This group is no longer active" } };
+
+  const { count } = await supabase
+    .from("group_members")
+    .select("*", { count: "exact", head: true })
+    .eq("group_id", groupId)
+    .eq("status", "active");
+
+  if ((count || 0) >= group.max_members) {
+    return { error: { message: "This group is full" } };
+  }
+
+  // Assign payout position = next available slot
+  const payoutPosition = (count || 0) + 1;
+
+  // Re-activate if previously exited, otherwise insert new
+  if (existing) {
+    const { error } = await supabase
+      .from("group_members")
+      .update({ status: "active", payout_position: payoutPosition, role: "member" })
+      .eq("id", existing.id);
+    return { error };
+  }
+
+  const { error } = await supabase
+    .from("group_members")
+    .insert({
+      group_id: groupId,
+      user_id: userId,
+      role: "member",
+      payout_position: payoutPosition,
+      commitment_score: 100,
+      total_on_time: 0,
+      total_payments: 0,
+      cycles_completed: 0,
+      lifetime_contributed: 0,
+      lifetime_received: 0,
+      status: "active",
+    });
+
+  return { error };
+}
+
+// ============ NOTIFICATIONS HELPER ============
+
+export async function notifyGroupMembers(
+  groupId: string,
+  title: string,
+  message: string,
+  type: "payment" | "payout" | "vote" | "reminder" | "system",
+  excludeUserId?: string
+): Promise<void> {
+  const supabase = getSupabase();
+
+  const { data: members } = await supabase
+    .from("group_members")
+    .select("user_id")
+    .eq("group_id", groupId)
+    .eq("status", "active");
+
+  if (!members || members.length === 0) return;
+
+  const notifications = members
+    .filter((m: { user_id: string }) => m.user_id !== excludeUserId)
+    .map((m: { user_id: string }) => ({
+      user_id: m.user_id,
+      title,
+      message,
+      type,
+      group_id: groupId,
+    }));
+
+  if (notifications.length > 0) {
+    await supabase.from("notifications").insert(notifications);
+  }
 }

@@ -166,6 +166,10 @@ CREATE POLICY "Groups viewable by members" ON groups
       AND group_members.status = 'active'
     )
   );
+-- Groups: basic info visible to any authenticated user (for join page preview)
+CREATE POLICY "Groups basic info for join" ON groups
+  FOR SELECT TO authenticated
+  USING (true);
 CREATE POLICY "Authenticated users can create groups" ON groups
   FOR INSERT TO authenticated WITH CHECK (auth.uid() = created_by);
 CREATE POLICY "Chairperson can update group" ON groups
@@ -206,10 +210,11 @@ CREATE POLICY "Transactions viewable by group members" ON transactions
       AND group_members.status = 'active'
     )
   );
-CREATE POLICY "Members can create transactions" ON transactions
+CREATE POLICY "Members can create own transactions" ON transactions
   FOR INSERT TO authenticated
   WITH CHECK (
-    EXISTS (
+    member_id = auth.uid()
+    AND EXISTS (
       SELECT 1 FROM group_members 
       WHERE group_members.group_id = transactions.group_id 
       AND group_members.user_id = auth.uid()
@@ -227,8 +232,28 @@ CREATE POLICY "Rules viewable by group members" ON constitution_rules
       AND group_members.user_id = auth.uid()
     )
   );
-CREATE POLICY "Chairperson can manage rules" ON constitution_rules
-  FOR ALL TO authenticated
+CREATE POLICY "Chairperson can insert rules" ON constitution_rules
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM group_members 
+      WHERE group_members.group_id = constitution_rules.group_id 
+      AND group_members.user_id = auth.uid()
+      AND group_members.role = 'chairperson'
+    )
+  );
+CREATE POLICY "Chairperson can update rules" ON constitution_rules
+  FOR UPDATE TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM group_members 
+      WHERE group_members.group_id = constitution_rules.group_id 
+      AND group_members.user_id = auth.uid()
+      AND group_members.role = 'chairperson'
+    )
+  );
+CREATE POLICY "Chairperson can delete rules" ON constitution_rules
+  FOR DELETE TO authenticated
   USING (
     EXISTS (
       SELECT 1 FROM group_members 
@@ -275,8 +300,8 @@ CREATE POLICY "Members can cast votes" ON vote_casts
 -- Notifications: users can only see their own
 CREATE POLICY "Users can view own notifications" ON notifications
   FOR SELECT TO authenticated USING (auth.uid() = user_id);
-CREATE POLICY "System can create notifications" ON notifications
-  FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Users can create own notifications" ON notifications
+  FOR INSERT TO authenticated WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own notifications" ON notifications
   FOR UPDATE TO authenticated USING (auth.uid() = user_id);
 
@@ -321,3 +346,98 @@ CREATE TRIGGER update_profiles_updated_at
 CREATE TRIGGER update_groups_updated_at
   BEFORE UPDATE ON groups
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============ SECURE FINANCIAL FUNCTIONS ============
+
+-- Atomic contribution recording: insert transaction + update member stats + update pool
+CREATE OR REPLACE FUNCTION record_contribution(
+  p_group_id UUID,
+  p_member_id UUID,
+  p_amount NUMERIC(12,2),
+  p_round INT,
+  p_note TEXT DEFAULT NULL
+)
+RETURNS JSON AS $$
+DECLARE
+  v_member group_members%ROWTYPE;
+  v_tx_id UUID;
+BEGIN
+  -- Verify caller is the member
+  IF p_member_id != auth.uid() THEN
+    RETURN json_build_object('error', 'You can only record your own contributions');
+  END IF;
+
+  -- Verify membership
+  SELECT * INTO v_member FROM group_members
+    WHERE group_id = p_group_id AND user_id = p_member_id AND status = 'active';
+  IF NOT FOUND THEN
+    RETURN json_build_object('error', 'You are not an active member of this group');
+  END IF;
+
+  -- Insert the transaction
+  INSERT INTO transactions (group_id, member_id, amount, type, status, round, note)
+  VALUES (p_group_id, p_member_id, p_amount, 'contribution', 'completed', p_round, p_note)
+  RETURNING id INTO v_tx_id;
+
+  -- Update member stats atomically
+  UPDATE group_members SET
+    lifetime_contributed = lifetime_contributed + p_amount,
+    total_payments = total_payments + 1,
+    total_on_time = total_on_time + 1,
+    commitment_score = ROUND(((total_on_time + 1)::NUMERIC / (total_payments + 1)::NUMERIC) * 100)
+  WHERE group_id = p_group_id AND user_id = p_member_id;
+
+  -- Update group pool atomically
+  UPDATE groups SET total_pool = total_pool + p_amount WHERE id = p_group_id;
+
+  RETURN json_build_object('id', v_tx_id, 'success', true);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Atomic payout processing: insert payout transaction + advance round
+CREATE OR REPLACE FUNCTION process_payout(
+  p_group_id UUID,
+  p_recipient_id UUID
+)
+RETURNS JSON AS $$
+DECLARE
+  v_group groups%ROWTYPE;
+  v_caller_role TEXT;
+  v_payout_amount NUMERIC(12,2);
+  v_tx_id UUID;
+BEGIN
+  -- Verify caller is chairperson or treasurer
+  SELECT role INTO v_caller_role FROM group_members
+    WHERE group_id = p_group_id AND user_id = auth.uid() AND status = 'active';
+  IF v_caller_role NOT IN ('chairperson', 'treasurer') THEN
+    RETURN json_build_object('error', 'Only chairperson or treasurer can process payouts');
+  END IF;
+
+  -- Get group details
+  SELECT * INTO v_group FROM groups WHERE id = p_group_id;
+  IF NOT FOUND THEN
+    RETURN json_build_object('error', 'Group not found');
+  END IF;
+
+  v_payout_amount := v_group.contribution_amount * v_group.max_members;
+
+  -- Insert payout transaction
+  INSERT INTO transactions (group_id, member_id, amount, type, status, round)
+  VALUES (p_group_id, p_recipient_id, v_payout_amount, 'payout', 'completed', v_group.current_round)
+  RETURNING id INTO v_tx_id;
+
+  -- Update recipient stats
+  UPDATE group_members SET
+    lifetime_received = lifetime_received + v_payout_amount,
+    cycles_completed = cycles_completed + 1
+  WHERE group_id = p_group_id AND user_id = p_recipient_id;
+
+  -- Reset pool and advance round
+  UPDATE groups SET
+    total_pool = 0,
+    current_round = current_round + 1
+  WHERE id = p_group_id;
+
+  RETURN json_build_object('id', v_tx_id, 'amount', v_payout_amount, 'success', true);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
