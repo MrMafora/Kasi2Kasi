@@ -143,6 +143,26 @@ export default function GroupDetailPage() {
           "payment",
           user.id
         );
+
+        // Send email receipt
+        try {
+          if (user.email) {
+            await fetch("/api/email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "contribution",
+                to: user.email,
+                name: profile?.name || "Member",
+                groupName: group.name,
+                amount: group.contribution_amount,
+                round: group.current_round,
+              }),
+            });
+          }
+        } catch (err) {
+          console.error("Failed to send contribution receipt:", err);
+        }
         await refreshData();
         setTimeout(() => {
           setShowContributeModal(false);

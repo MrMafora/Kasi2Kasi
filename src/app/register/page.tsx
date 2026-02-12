@@ -53,6 +53,19 @@ export default function RegisterPage() {
         if (error) {
           setError(error.message || "Failed to create account");
         } else {
+          try {
+            await fetch("/api/email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "welcome",
+                to: formData.email,
+                name: formData.name,
+              }),
+            });
+          } catch (err) {
+            console.error("Failed to send welcome email:", err);
+          }
           router.push("/dashboard");
         }
       } catch (err: any) {

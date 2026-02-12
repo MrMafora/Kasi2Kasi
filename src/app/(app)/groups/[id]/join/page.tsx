@@ -64,6 +64,27 @@ export default function JoinGroupPage() {
                     "system",
                     user.id
                 );
+
+                // Send welcome email
+                try {
+                    if (user.email) {
+                        await fetch("/api/email", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                type: "join_group",
+                                to: user.email,
+                                name: profile?.name || "Member",
+                                groupName: group.name,
+                                memberCount: group.member_count + 1,
+                                contribution: group.contribution_amount,
+                                frequency: group.frequency,
+                            }),
+                        });
+                    }
+                } catch (err) {
+                    console.error("Failed to send join email:", err);
+                }
                 setTimeout(() => router.push(`/groups/${group.id}`), 2000);
             }
         } catch {
