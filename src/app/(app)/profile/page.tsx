@@ -6,7 +6,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Shield, Award, ChevronRight,
-  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check
+  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check, MessageSquare
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getMyGroups, updateProfile } from "@/lib/database";
@@ -320,6 +320,14 @@ export default function ProfilePage() {
           >
             <span className="text-gray-400"><Clock className="w-4 h-4" /></span>
             <span className="text-sm font-medium text-kasi-charcoal flex-1">Settlement Calculator</span>
+            <ChevronRight className="w-4 h-4 text-gray-300" />
+          </Link>
+          <Link
+            href="/contact"
+            className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
+          >
+            <span className="text-gray-400"><MessageSquare className="w-4 h-4" /></span>
+            <span className="text-sm font-medium text-kasi-charcoal flex-1">Help & Support</span>
             <ChevronRight className="w-4 h-4 text-gray-300" />
           </Link>
         </div>

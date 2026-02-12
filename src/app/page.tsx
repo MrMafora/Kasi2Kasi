@@ -181,8 +181,8 @@ export default function LandingPage() {
                 onMouseEnter={() => setActiveFeature(i)}
               >
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-all duration-300 ${activeFeature === i
-                    ? `bg-gradient-to-br ${feature.color} text-white shadow-lg`
-                    : `${feature.bgLight} ${feature.textColor}`
+                  ? `bg-gradient-to-br ${feature.color} text-white shadow-lg`
+                  : `${feature.bgLight} ${feature.textColor}`
                   }`}>
                   {feature.icon}
                 </div>
@@ -289,9 +289,10 @@ export default function LandingPage() {
             <Image src="/icons/logo.png" alt="K2K" width={28} height={28} className="rounded-lg" />
             <span className="font-semibold">Kasi2Kasi</span>
           </div>
-          <p className="text-sm text-gray-500">
-            © 2025 Kasi2Kasi Digital Stokvels. Built for the community.
-          </p>
+          <div className="flex flex-col md:flex-row items-center gap-6 text-sm text-gray-500">
+            <Link href="/contact" className="hover:text-white transition-colors">Contact Support</Link>
+            <p>© 2025 Kasi2Kasi Digital Stokvels. Built for the community.</p>
+          </div>
         </div>
       </footer>
     </div>
