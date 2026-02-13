@@ -5,6 +5,7 @@ import {
     sendPayoutEmail,
     sendJoinGroupEmail,
     sendSupportEmail,
+    sendRuleAcceptedEmail,
 } from "@/lib/email";
 
 export async function POST(request: NextRequest) {
@@ -47,6 +48,17 @@ export async function POST(request: NextRequest) {
                 result = await sendJoinGroupEmail(
                     data.to, data.name, data.groupName,
                     data.memberCount || 0, data.contribution || 0, data.frequency || "monthly"
+                );
+                break;
+
+            case "rule_accepted":
+                if (!data.to || !data.recipientName || !data.signerName || !data.groupName || !data.ruleTitle) {
+                    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+                }
+                result = await sendRuleAcceptedEmail(
+                    data.to, data.recipientName, data.signerName,
+                    data.groupName, data.ruleTitle,
+                    data.acceptedCount || 0, data.totalMembers || 0
                 );
                 break;
 

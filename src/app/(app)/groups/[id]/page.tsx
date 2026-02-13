@@ -367,9 +367,50 @@ export default function GroupDetailPage() {
   };
 
   const handleAcceptRule = async (ruleId: string) => {
-    if (!user) return;
+    if (!user || !group) return;
     const { error } = await acceptRuleDb(ruleId, user.id);
-    if (!error) await refreshData();
+    if (error) return;
+
+    await refreshData();
+
+    // Find the rule that was accepted
+    const rule = rules.find(r => r.id === ruleId);
+    if (!rule) return;
+
+    const acceptedCount = (ruleAcceptances[ruleId]?.length || 0) + 1;
+    const signerName = profile?.name || "A member";
+
+    // Notify other members (in-app)
+    try {
+      await notifyGroupMembers(
+        group.id,
+        "Constitution Rule Signed ✍️",
+        `${signerName} accepted "${rule.title}" (${acceptedCount}/${group.member_count} signed)`,
+        "system",
+        user.id
+      );
+    } catch {}
+
+    // Email other members (fire-and-forget)
+    const otherMembers = (group.members || []).filter(
+      (m: any) => m.user_id !== user.id && m.profile?.email
+    );
+    for (const member of otherMembers) {
+      fetch("/api/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "rule_accepted",
+          to: member.profile?.email,
+          recipientName: member.profile?.name || "Member",
+          signerName,
+          groupName: group.name,
+          ruleTitle: rule.title,
+          acceptedCount,
+          totalMembers: group.member_count,
+        }),
+      }).catch(() => {}); // fire-and-forget
+    }
   };
 
   const handleCopyLink = async () => {

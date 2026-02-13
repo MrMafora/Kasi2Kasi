@@ -2,6 +2,7 @@ import { Resend } from "resend";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "winstonmafora@gmail.com";
 const APP_NAME = "Kasi2Kasi";
 
 function getResend() {
@@ -175,6 +176,41 @@ export async function sendJoinGroupEmail(
     });
 }
 
+export async function sendRuleAcceptedEmail(
+    to: string,
+    recipientName: string,
+    signerName: string,
+    groupName: string,
+    ruleTitle: string,
+    acceptedCount: number,
+    totalMembers: number
+) {
+    const html = baseTemplate(`
+    <h1>Constitution Rule Signed ✍️</h1>
+    <p>Hi <strong>${recipientName}</strong>,</p>
+    <p><strong>${signerName}</strong> has accepted a rule in <strong>${groupName}</strong>'s constitution.</p>
+    <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <p style="margin: 4px 0; font-weight: 600; color: #1A1A2E;">${ruleTitle}</p>
+      <p style="margin: 4px 0; color: #6b7280; font-size: 13px;">✅ ${acceptedCount}/${totalMembers} members have signed</p>
+    </div>
+    ${acceptedCount < totalMembers
+            ? `<p>The group is waiting for ${totalMembers - acceptedCount} more member${totalMembers - acceptedCount !== 1 ? "s" : ""} to accept this rule.</p>`
+            : `<p style="color: #2D6A4F; font-weight: 600;">🎉 All members have accepted this rule!</p>`
+        }
+    <hr class="divider" />
+    <p style="text-align: center;">
+      <a href="#" class="btn">View Constitution</a>
+    </p>
+  `);
+
+    return getResend().emails.send({
+        from: `${APP_NAME} <${FROM_EMAIL}>`,
+        to,
+        subject: `✍️ ${signerName} signed a rule in ${groupName}`,
+        html,
+    });
+}
+
 export async function sendSupportEmail(
     userEmail: string,
     userName: string,
@@ -194,7 +230,7 @@ export async function sendSupportEmail(
 
     await getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
-        to: FROM_EMAIL, // Support inbox
+        to: SUPPORT_EMAIL,
         replyTo: userEmail,
         subject: `[Support] ${subject}`,
         html: supportHtml,
