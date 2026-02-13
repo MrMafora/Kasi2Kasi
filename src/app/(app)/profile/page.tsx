@@ -6,10 +6,12 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Shield, Award, ChevronRight,
-  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check, MessageSquare
+  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check, MessageSquare, Camera
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getMyGroups, updateProfile } from "@/lib/database";
+import { createClient } from "@/lib/supabase/client";
+import { useToast } from "@/components/Toast";
 import {
   formatCurrency, getScoreColor, getScoreLabel,
 } from "@/lib/types";
@@ -19,6 +21,7 @@ import LoadingSpinner from "@/components/LoadingSpinner";
 export default function ProfilePage() {
   const { user, profile, loading: authLoading, signOut, refreshProfile } = useAuth();
   const router = useRouter();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [groups, setGroups] = useState<GroupWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -29,6 +32,7 @@ export default function ProfilePage() {
   const [editBeneficiary, setEditBeneficiary] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -67,7 +71,7 @@ export default function ProfilePage() {
         beneficiary_name: editBeneficiary || undefined,
       });
       if (error) {
-        alert(error.message || "Failed to update profile");
+        toastError(error.message || "Failed to update profile");
       } else {
         setSaveSuccess(true);
         await refreshProfile();
@@ -77,7 +81,7 @@ export default function ProfilePage() {
         }, 1500);
       }
     } catch {
-      alert("Failed to update profile");
+      toastError("Failed to update profile");
     } finally {
       setSaving(false);
     }
@@ -86,6 +90,44 @@ export default function ProfilePage() {
   const handleSignOut = async () => {
     await signOut();
     router.push("/");
+  };
+
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      toastError("Image must be under 2MB");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const supabase = createClient();
+      const ext = file.name.split(".").pop() || "jpg";
+      const filePath = `${user.id}/avatar.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) {
+        toastError("Failed to upload image");
+        return;
+      }
+
+      const { data: { publicUrl } } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(filePath);
+
+      const avatarUrl = `${publicUrl}?t=${Date.now()}`;
+      await updateProfile(user.id, { avatar_url: avatarUrl } as any);
+      await refreshProfile();
+    } catch {
+      toastError("Failed to upload image");
+    } finally {
+      setUploadingAvatar(false);
+    }
   };
 
   if (authLoading || loading) {
@@ -116,8 +158,25 @@ export default function ProfilePage() {
           </button>
         )}
 
-        <div className="w-20 h-20 bg-kasi-green/10 rounded-full flex items-center justify-center mx-auto mb-3">
-          <span className="text-kasi-green font-bold text-2xl">{profile?.avatar_initials || "?"}</span>
+        <div className="relative w-20 h-20 mx-auto mb-3">
+          <label className="block relative cursor-pointer">
+            {profile?.avatar_url ? (
+              <img src={profile.avatar_url} alt={profile.name} className="w-20 h-20 rounded-full object-cover" />
+            ) : (
+              <div className="w-20 h-20 bg-kasi-green/10 rounded-full flex items-center justify-center">
+                <span className="text-kasi-green font-bold text-2xl">{profile?.avatar_initials || "?"}</span>
+              </div>
+            )}
+            <div className="absolute bottom-0 right-0 w-7 h-7 bg-kasi-green rounded-full flex items-center justify-center shadow-lg border-2 border-white">
+              <Camera className="w-3.5 h-3.5 text-white" />
+            </div>
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleAvatarUpload} className="hidden" />
+          </label>
+          {uploadingAvatar && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full">
+              <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            </div>
+          )}
         </div>
 
         {editing ? (

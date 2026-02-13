@@ -1,8 +1,13 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 const APP_NAME = "Kasi2Kasi";
+
+function getResend() {
+    if (!resend) throw new Error("Email not configured: RESEND_API_KEY is missing");
+    return resend;
+}
 
 // ===== EMAIL TEMPLATES =====
 
@@ -70,7 +75,7 @@ export async function sendWelcomeEmail(to: string, name: string) {
     </p>
   `);
 
-    return resend.emails.send({
+    return getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to,
         subject: `Welcome to ${APP_NAME}, ${name}! 🎉`,
@@ -100,7 +105,7 @@ export async function sendContributionEmail(
     </p>
   `);
 
-    return resend.emails.send({
+    return getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to,
         subject: `✅ R${amount.toFixed(2)} contribution recorded — ${groupName}`,
@@ -130,7 +135,7 @@ export async function sendPayoutEmail(
     </p>
   `);
 
-    return resend.emails.send({
+    return getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to,
         subject: `🎉 R${amount.toFixed(2)} payout — ${groupName}`,
@@ -162,7 +167,7 @@ export async function sendJoinGroupEmail(
     </p>
   `);
 
-    return resend.emails.send({
+    return getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to,
         subject: `🤝 You joined ${groupName} on ${APP_NAME}`,
@@ -187,7 +192,7 @@ export async function sendSupportEmail(
     <p>${message.replace(/\n/g, "<br />")}</p>
   `);
 
-    await resend.emails.send({
+    await getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to: FROM_EMAIL, // Support inbox
         replyTo: userEmail,
@@ -207,7 +212,7 @@ export async function sendSupportEmail(
     <p>In the meantime, you can continue using Kasi2Kasi as normal.</p>
   `);
 
-    return resend.emails.send({
+    return getResend().emails.send({
         from: `${APP_NAME} <${FROM_EMAIL}>`,
         to: userEmail,
         subject: `We received your message — ${APP_NAME} Support`,

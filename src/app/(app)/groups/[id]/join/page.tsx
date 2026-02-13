@@ -17,6 +17,7 @@ export default function JoinGroupPage() {
         id: string; name: string; description: string;
         contribution_amount: number; frequency: string;
         max_members: number; member_count: number; status: string;
+        type?: string; goal_description?: string; goal_monthly_target?: number; goal_recurring?: boolean;
     } | null>(null);
     const [loading, setLoading] = useState(true);
     const [joining, setJoining] = useState(false);
@@ -162,6 +163,7 @@ export default function JoinGroupPage() {
     if (!group) return null;
 
     const isFull = group.member_count >= group.max_members;
+    const isGoal = group.type === "goal";
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-kasi-charcoal to-kasi-slate">
@@ -185,27 +187,53 @@ export default function JoinGroupPage() {
                 <div className="border border-gray-100 rounded-2xl p-5 mb-6">
                     <p className="text-sm text-gray-600 leading-relaxed mb-4">{group.description}</p>
 
-                    <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-gray-50 rounded-xl p-3 text-center">
-                            <Coins className="w-4 h-4 text-kasi-green mx-auto mb-1" />
-                            <p className="text-xs text-gray-400">Contribution</p>
-                            <p className="text-sm font-bold text-kasi-charcoal">{formatCurrency(group.contribution_amount)}</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-3 text-center">
-                            <Calendar className="w-4 h-4 text-kasi-gold mx-auto mb-1" />
-                            <p className="text-xs text-gray-400">Frequency</p>
-                            <p className="text-sm font-bold text-kasi-charcoal capitalize">{group.frequency}</p>
-                        </div>
-                        <div className="bg-gray-50 rounded-xl p-3 text-center">
-                            <Users className="w-4 h-4 text-purple-500 mx-auto mb-1" />
-                            <p className="text-xs text-gray-400">Members</p>
-                            <p className="text-sm font-bold text-kasi-charcoal">{group.member_count}/{group.max_members}</p>
-                        </div>
+                    <div className={`grid ${isGoal ? "grid-cols-2" : "grid-cols-3"} gap-3`}>
+                        {isGoal ? (
+                          <>
+                            <div className="bg-gray-50 rounded-xl p-3 text-center">
+                              <Coins className="w-4 h-4 text-amber-500 mx-auto mb-1" />
+                              <p className="text-xs text-gray-400">Monthly Target</p>
+                              <p className="text-sm font-bold text-kasi-charcoal">{formatCurrency(group.goal_monthly_target || 0)}</p>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-3 text-center">
+                              <Users className="w-4 h-4 text-purple-500 mx-auto mb-1" />
+                              <p className="text-xs text-gray-400">Members</p>
+                              <p className="text-sm font-bold text-kasi-charcoal">{group.member_count}/{group.max_members}</p>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="bg-gray-50 rounded-xl p-3 text-center">
+                                <Coins className="w-4 h-4 text-kasi-green mx-auto mb-1" />
+                                <p className="text-xs text-gray-400">Contribution</p>
+                                <p className="text-sm font-bold text-kasi-charcoal">{formatCurrency(group.contribution_amount)}</p>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-3 text-center">
+                                <Calendar className="w-4 h-4 text-kasi-gold mx-auto mb-1" />
+                                <p className="text-xs text-gray-400">Frequency</p>
+                                <p className="text-sm font-bold text-kasi-charcoal capitalize">{group.frequency}</p>
+                            </div>
+                            <div className="bg-gray-50 rounded-xl p-3 text-center">
+                                <Users className="w-4 h-4 text-purple-500 mx-auto mb-1" />
+                                <p className="text-xs text-gray-400">Members</p>
+                                <p className="text-sm font-bold text-kasi-charcoal">{group.member_count}/{group.max_members}</p>
+                            </div>
+                          </>
+                        )}
                     </div>
                 </div>
 
-                {/* Payout preview */}
-                <div className="bg-kasi-green/5 border border-kasi-green/10 rounded-2xl p-4 mb-6">
+                {/* Info preview */}
+                {isGoal ? (
+                  <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 mb-6">
+                    <p className="text-xs text-gray-500 mb-1">Goal Fund</p>
+                    <p className="text-sm font-medium text-kasi-charcoal mb-2">{group.goal_description || group.description}</p>
+                    <p className="text-xs text-gray-400">
+                      Flexible contributions — contribute what you can toward the monthly target of {formatCurrency(group.goal_monthly_target || 0)}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-kasi-green/5 border border-kasi-green/10 rounded-2xl p-4 mb-6">
                     <p className="text-xs text-gray-500 mb-1">Expected payout per round</p>
                     <p className="text-2xl font-bold text-kasi-green">
                         {formatCurrency(group.contribution_amount * group.max_members)}
@@ -213,7 +241,8 @@ export default function JoinGroupPage() {
                     <p className="text-xs text-gray-400 mt-1">
                         {group.max_members} members × {formatCurrency(group.contribution_amount)} {group.frequency}
                     </p>
-                </div>
+                  </div>
+                )}
 
                 {/* Error */}
                 {error && (
@@ -248,7 +277,10 @@ export default function JoinGroupPage() {
                 )}
 
                 <p className="text-[10px] text-gray-400 text-center mt-4">
-                    By joining, you agree to contribute {formatCurrency(group.contribution_amount)} {group.frequency} and follow the group&apos;s constitution rules.
+                    {isGoal
+                      ? "By joining, you agree to contribute toward the group's shared goal."
+                      : `By joining, you agree to contribute ${formatCurrency(group.contribution_amount)} ${group.frequency} and follow the group's constitution rules.`
+                    }
                 </p>
             </div>
         </div>

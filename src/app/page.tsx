@@ -41,6 +41,7 @@ export default function LandingPage() {
       color: "from-emerald-500 to-teal-600",
       bgLight: "bg-emerald-50",
       textColor: "text-emerald-600",
+      href: "/features/virtual-ledger",
     },
     {
       icon: <Users className="w-6 h-6" />,
@@ -49,6 +50,7 @@ export default function LandingPage() {
       color: "from-blue-500 to-indigo-600",
       bgLight: "bg-blue-50",
       textColor: "text-blue-600",
+      href: "/features/round-robin",
     },
     {
       icon: <Shield className="w-6 h-6" />,
@@ -57,6 +59,7 @@ export default function LandingPage() {
       color: "from-amber-500 to-orange-600",
       bgLight: "bg-amber-50",
       textColor: "text-amber-600",
+      href: "/features/commitment-score",
     },
     {
       icon: <Vote className="w-6 h-6" />,
@@ -65,6 +68,7 @@ export default function LandingPage() {
       color: "from-purple-500 to-violet-600",
       bgLight: "bg-purple-50",
       textColor: "text-purple-600",
+      href: "/features/democratic-governance",
     },
     {
       icon: <Smartphone className="w-6 h-6" />,
@@ -73,6 +77,7 @@ export default function LandingPage() {
       color: "from-rose-500 to-pink-600",
       bgLight: "bg-rose-50",
       textColor: "text-rose-600",
+      href: "/features/mobile",
     },
     {
       icon: <CheckCircle2 className="w-6 h-6" />,
@@ -81,6 +86,7 @@ export default function LandingPage() {
       color: "from-teal-500 to-cyan-600",
       bgLight: "bg-teal-50",
       textColor: "text-teal-600",
+      href: "/features/digital-constitution",
     },
   ];
 
@@ -175,8 +181,9 @@ export default function LandingPage() {
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 stagger-children">
             {features.map((feature, i) => (
-              <div
+              <Link
                 key={i}
+                href={feature.href}
                 className="card-hover group"
                 onMouseEnter={() => setActiveFeature(i)}
               >
@@ -190,11 +197,10 @@ export default function LandingPage() {
                   {feature.title}
                 </h3>
                 <p className="text-gray-500 text-sm leading-relaxed">{feature.description}</p>
-                <div className={`mt-4 flex items-center gap-1 text-sm font-medium transition-all duration-300 ${activeFeature === i ? "opacity-100 translate-x-0 text-kasi-green" : "opacity-0 -translate-x-2"
-                  }`}>
+                <div className="mt-4 flex items-center gap-1 text-sm font-medium text-kasi-green opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300">
                   Learn more <ChevronRight className="w-4 h-4" />
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -291,7 +297,7 @@ export default function LandingPage() {
           </div>
           <div className="flex flex-col md:flex-row items-center gap-6 text-sm text-gray-500">
             <Link href="/contact" className="hover:text-white transition-colors">Contact Support</Link>
-            <p>© 2025 Kasi2Kasi Digital Stokvels. Built for the community.</p>
+            <p>© 2026 Kasi2Kasi Digital Stokvels. Built for the community.</p>
           </div>
         </div>
       </footer>

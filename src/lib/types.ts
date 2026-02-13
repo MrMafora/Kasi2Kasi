@@ -6,6 +6,7 @@ export interface Profile {
   phone: string;
   email: string | null;
   avatar_initials: string;
+  avatar_url: string | null;
   beneficiary_name: string | null;
   created_at: string;
   updated_at: string;
@@ -24,9 +25,27 @@ export interface StokvelGroup {
   next_payout_date: string | null;
   next_payout_member_id: string | null;
   status: "active" | "completed" | "paused";
+  type: "stokvel" | "goal";
+  goal_target: number | null;
+  goal_description: string | null;
+  goal_recurring: boolean;
+  goal_monthly_target: number | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface Expense {
+  id: string;
+  group_id: string;
+  description: string;
+  amount: number;
+  date: string;
+  receipt_url: string | null;
+  recorded_by: string;
+  created_at: string;
+  // Joined
+  recorder_name?: string;
 }
 
 export interface GroupMember {

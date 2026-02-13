@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import type {
   StokvelGroup, GroupMember, Transaction, ConstitutionRule,
-  Vote, VoteCast, Notification, Profile, GroupWithDetails,
+  Vote, VoteCast, Notification, Profile, GroupWithDetails, Expense,
 } from "@/lib/types";
 
 function getSupabase() {
@@ -379,7 +379,7 @@ export async function getGroupPublicInfo(groupId: string): Promise<{
 
   const { data: group, error: groupError } = await supabase
     .from("groups")
-    .select("id, name, description, contribution_amount, frequency, max_members, status")
+    .select("id, name, description, contribution_amount, frequency, max_members, status, type, goal_description, goal_monthly_target, goal_recurring")
     .eq("id", groupId)
     .single();
 
@@ -461,6 +461,112 @@ export async function joinGroup(groupId: string, userId: string): Promise<{ erro
     });
 
   return { error };
+}
+
+// ============ GOAL FUND ============
+
+export async function createGoalGroup(
+  userId: string,
+  data: {
+    name: string;
+    description: string;
+    goal_description: string;
+    goal_monthly_target: number;
+    goal_recurring: boolean;
+    max_members: number;
+  }
+): Promise<{ group: StokvelGroup | null; error: any }> {
+  const supabase = getSupabase();
+
+  const { data: group, error } = await supabase
+    .from("groups")
+    .insert({
+      name: data.name,
+      description: data.description,
+      type: "goal",
+      contribution_amount: 0, // flexible contributions
+      frequency: "monthly",
+      max_members: data.max_members,
+      total_rounds: 0,
+      goal_description: data.goal_description,
+      goal_monthly_target: data.goal_monthly_target,
+      goal_recurring: data.goal_recurring,
+      created_by: userId,
+    })
+    .select()
+    .single();
+
+  if (error || !group) return { group: null, error };
+
+  const { error: memberError } = await supabase
+    .from("group_members")
+    .insert({
+      group_id: group.id,
+      user_id: userId,
+      role: "chairperson",
+      payout_position: 1,
+    });
+
+  if (memberError) return { group: null, error: memberError };
+
+  return { group, error: null };
+}
+
+export async function recordGoalContribution(data: {
+  group_id: string;
+  member_id: string;
+  amount: number;
+  note?: string;
+}): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  const { data: result, error } = await supabase.rpc("record_goal_contribution", {
+    p_group_id: data.group_id,
+    p_member_id: data.member_id,
+    p_amount: data.amount,
+    p_note: data.note || null,
+  });
+
+  if (error) return { error };
+  if (result?.error) return { error: { message: result.error } };
+  return { error: null };
+}
+
+export async function getGroupExpenses(groupId: string): Promise<Expense[]> {
+  const supabase = getSupabase();
+
+  const { data } = await supabase
+    .from("expenses")
+    .select("*, recorder:profiles!recorded_by(name)")
+    .eq("group_id", groupId)
+    .order("date", { ascending: false });
+
+  return (data || []).map((e: any) => ({
+    ...e,
+    recorder_name: e.recorder?.name || "Unknown",
+  }));
+}
+
+export async function recordExpense(data: {
+  group_id: string;
+  description: string;
+  amount: number;
+  date: string;
+  receipt_url?: string;
+}): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  const { data: result, error } = await supabase.rpc("record_goal_expense", {
+    p_group_id: data.group_id,
+    p_description: data.description,
+    p_amount: data.amount,
+    p_date: data.date,
+    p_receipt_url: data.receipt_url || null,
+  });
+
+  if (error) return { error };
+  if (result?.error) return { error: { message: result.error } };
+  return { error: null };
 }
 
 // ============ NOTIFICATIONS HELPER ============
