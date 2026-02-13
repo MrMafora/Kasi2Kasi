@@ -6,7 +6,8 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Shield, Award, ChevronRight,
-  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check, MessageSquare, Camera
+  LogOut, Settings, Heart, Clock, Edit3, Save, X, Check, MessageSquare, Camera,
+  Target, Bell, BellOff
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getMyGroups, updateProfile } from "@/lib/database";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/types";
 import type { GroupWithDetails } from "@/lib/types";
 import LoadingSpinner from "@/components/LoadingSpinner";
+import { usePushNotifications } from "@/hooks/usePushNotifications";
 
 export default function ProfilePage() {
   const { user, profile, loading: authLoading, signOut, refreshProfile } = useAuth();
@@ -33,6 +35,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const { supported: pushSupported, permission: pushPermission, subscribe, unsubscribe } = usePushNotifications();
 
   useEffect(() => {
     async function loadData() {
@@ -144,6 +147,12 @@ export default function ProfilePage() {
   const avgScore = groups.length > 0
     ? Math.round(groups.reduce((s, g) => s + (g.my_membership?.commitment_score || 0), 0) / groups.length)
     : 0;
+
+  const goalFunds = groups.filter(g => g.type === "goal");
+  const stokvels = groups.filter(g => g.type !== "goal");
+  const goalContributed = goalFunds.reduce((s, g) => s + (g.my_membership?.lifetime_contributed || 0), 0);
+  const stokvelContributed = stokvels.reduce((s, g) => s + (g.my_membership?.lifetime_contributed || 0), 0);
+  const hasBothTypes = goalFunds.length > 0 && stokvels.length > 0;
 
   return (
     <div className="max-w-lg mx-auto px-4 pt-12">
@@ -268,7 +277,7 @@ export default function ProfilePage() {
                 {getScoreLabel(avgScore)}
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                Average across {groups.length} Stokvel{groups.length !== 1 ? "s" : ""}
+                Average across {groups.length} group{groups.length !== 1 ? "s" : ""}
               </p>
             </div>
           </div>
@@ -314,8 +323,23 @@ export default function ProfilePage() {
           {groups.length > 0 && (
             <p className="text-xs text-gray-400 text-center mt-3">
               You have successfully completed {totalCycles} cycle{totalCycles !== 1 ? "s" : ""} and orchestrated{" "}
-              {formatCurrency(totalContributed + totalReceived)} through your Kasi2Kasi Stokvels.
+              {formatCurrency(totalContributed + totalReceived)} through Kasi2Kasi.
             </p>
+          )}
+
+          {hasBothTypes && (
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <div className="bg-kasi-green/5 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-400 mb-1">Stokvel Contributions</p>
+                <p className="text-sm font-bold text-kasi-green">{formatCurrency(stokvelContributed)}</p>
+                <p className="text-[10px] text-gray-400">{stokvels.length} group{stokvels.length !== 1 ? "s" : ""}</p>
+              </div>
+              <div className="bg-amber-50 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-400 mb-1">Goal Fund Contributions</p>
+                <p className="text-sm font-bold text-amber-600">{formatCurrency(goalContributed)}</p>
+                <p className="text-[10px] text-gray-400">{goalFunds.length} fund{goalFunds.length !== 1 ? "s" : ""}</p>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -325,26 +349,35 @@ export default function ProfilePage() {
         <div className="card mb-4">
           <h3 className="font-semibold text-sm text-kasi-charcoal mb-3">My Memberships</h3>
           <div className="space-y-2">
-            {groups.map((g) => (
-              <Link
-                key={g.id}
-                href={`/groups/${g.id}`}
-                className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
-              >
-                <div className="w-10 h-10 bg-kasi-green/10 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <span className="text-kasi-green font-bold text-xs">
-                    {g.name.split(" ").map((w: string) => w[0]).join("")}
-                  </span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-kasi-charcoal truncate">{g.name}</p>
-                  <p className="text-xs text-gray-400 capitalize">
-                    {g.my_membership?.role || "member"} · Score: {Math.round(g.my_membership?.commitment_score || 0)}%
-                  </p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-gray-300" />
-              </Link>
-            ))}
+            {groups.map((g) => {
+              const isGoal = g.type === "goal";
+              return (
+                <Link
+                  key={g.id}
+                  href={`/groups/${g.id}`}
+                  className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-gray-50 transition-colors"
+                >
+                  {isGoal ? (
+                    <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <Target className="w-5 h-5 text-amber-500" />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 bg-kasi-green/10 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <span className="text-kasi-green font-bold text-xs">
+                        {g.name.split(" ").map((w: string) => w[0]).join("")}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-kasi-charcoal truncate">{g.name}</p>
+                    <p className="text-xs text-gray-400 capitalize">
+                      {isGoal ? "Goal Fund" : `${g.my_membership?.role || "member"} · Score: ${Math.round(g.my_membership?.commitment_score || 0)}%`}
+                    </p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-gray-300" />
+                </Link>
+              );
+            })}
           </div>
         </div>
       )}
@@ -373,6 +406,22 @@ export default function ProfilePage() {
             <span className="text-sm font-medium text-kasi-charcoal flex-1">Account Settings</span>
             <ChevronRight className="w-4 h-4 text-gray-300" />
           </button>
+          {pushSupported && (
+            <button
+              onClick={pushPermission === "granted" ? unsubscribe : subscribe}
+              className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
+            >
+              <span className="text-gray-400">
+                {pushPermission === "granted" ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+              </span>
+              <span className="text-sm font-medium text-kasi-charcoal flex-1">
+                {pushPermission === "granted" ? "Notifications Enabled" : "Enable Notifications"}
+              </span>
+              <div className={`w-10 h-6 rounded-full flex items-center px-0.5 transition-colors ${pushPermission === "granted" ? "bg-kasi-green justify-end" : "bg-gray-300 justify-start"}`}>
+                <div className="w-5 h-5 bg-white rounded-full shadow" />
+              </div>
+            </button>
+          )}
           <Link
             href="/settlement"
             className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-gray-50 transition-colors text-left"

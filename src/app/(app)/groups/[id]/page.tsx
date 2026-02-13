@@ -10,6 +10,7 @@ import {
   Target, Receipt, MessageCircle
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { createClient } from "@/lib/supabase/client";
 import {
   getGroupById, getGroupTransactions, getConstitutionRules,
   getRuleAcceptances, getGroupVotes, castVote as castVoteDb,
@@ -48,6 +49,8 @@ export default function GroupDetailPage() {
   const [contributionAmount, setContributionAmount] = useState("");
   const [contributionSubmitting, setContributionSubmitting] = useState(false);
   const [contributionSuccess, setContributionSuccess] = useState(false);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
 
   // Expense modal state
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -156,10 +159,38 @@ export default function GroupDetailPage() {
     }
   };
 
+  const uploadReceipt = async (): Promise<string | null> => {
+    if (!receiptFile || !user) return null;
+    setUploadingReceipt(true);
+    try {
+      const supabase = createClient();
+      const ext = receiptFile.name.split(".").pop() || "jpg";
+      const filePath = `${group!.id}/${user.id}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("receipts").upload(filePath, receiptFile);
+      if (error) {
+        console.error("Receipt upload failed:", error);
+        return null;
+      }
+      const { data: { publicUrl } } = supabase.storage.from("receipts").getPublicUrl(filePath);
+      return publicUrl;
+    } catch (err) {
+      console.error("Receipt upload failed:", err);
+      return null;
+    } finally {
+      setUploadingReceipt(false);
+    }
+  };
+
   const handleContribute = async () => {
     if (!user || !group) return;
     setContributionSubmitting(true);
     try {
+      // Upload receipt if attached
+      const receiptUrl = await uploadReceipt();
+      const noteWithReceipt = receiptUrl
+        ? `[Receipt: ${receiptUrl}]${contributionNote ? ` ${contributionNote}` : ""}`
+        : contributionNote || undefined;
+
       if (isGoal) {
         const amount = parseFloat(contributionAmount);
         if (!amount || amount <= 0) {
@@ -171,7 +202,7 @@ export default function GroupDetailPage() {
           group_id: group.id,
           member_id: user.id,
           amount,
-          note: contributionNote || undefined,
+          note: noteWithReceipt,
         });
         if (error) {
           toastError(error.message || "Failed to record contribution");
@@ -179,6 +210,7 @@ export default function GroupDetailPage() {
           setContributionSuccess(true);
           setContributionNote("");
           setContributionAmount("");
+          setReceiptFile(null);
           await notifyGroupMembers(
             group.id,
             "Contribution Received",
@@ -198,13 +230,14 @@ export default function GroupDetailPage() {
           member_id: user.id,
           amount: group.contribution_amount,
           round: group.current_round,
-          note: contributionNote || undefined,
+          note: noteWithReceipt,
         });
         if (error) {
           toastError(error.message || "Failed to record contribution");
         } else {
           setContributionSuccess(true);
           setContributionNote("");
+          setReceiptFile(null);
           await notifyGroupMembers(
             group.id,
             "Contribution Received",
@@ -611,9 +644,21 @@ export default function GroupDetailPage() {
                         <p className="text-sm font-medium text-kasi-charcoal">{tx.member_name}</p>
                         <p className="text-xs text-gray-400">
                           {new Date(tx.created_at).toLocaleDateString("en-ZA")}
-                          {tx.note && ` · ${tx.note}`}
+                          {tx.note && !tx.note.startsWith("[Receipt:") && ` · ${tx.note}`}
+                          {tx.note && tx.note.startsWith("[Receipt:") && tx.note.replace(/^\[Receipt: [^\]]+\]\s*/, "") && ` · ${tx.note.replace(/^\[Receipt: [^\]]+\]\s*/, "")}`}
                         </p>
                       </div>
+                      {tx.note?.startsWith("[Receipt:") && (
+                        <a
+                          href={tx.note.match(/\[Receipt: ([^\]]+)\]/)?.[1] || "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-kasi-green hover:text-kasi-green-dark mr-1"
+                          title="View receipt"
+                        >
+                          <Receipt className="w-4 h-4" />
+                        </a>
+                      )}
                       <span className="text-sm font-semibold text-emerald-600">{formatCurrency(tx.amount)}</span>
                     </div>
                   ))}
@@ -753,6 +798,11 @@ export default function GroupDetailPage() {
                         <p className="text-sm font-medium text-kasi-charcoal">{tx.member_name}</p>
                         <p className="text-xs text-gray-400">{tx.created_at ? new Date(tx.created_at).toLocaleDateString("en-ZA") : "Awaiting payment"}{tx.status === "late" && " · Late"}</p>
                       </div>
+                      {tx.note?.startsWith("[Receipt:") && (
+                        <a href={tx.note.match(/\[Receipt: ([^\]]+)\]/)?.[1] || "#"} target="_blank" rel="noopener noreferrer" className="text-kasi-green hover:text-kasi-green-dark mr-1" title="View receipt">
+                          <Receipt className="w-4 h-4" />
+                        </a>
+                      )}
                       <span className={`text-sm font-semibold ${tx.status === "completed" ? "text-emerald-600" : tx.status === "late" ? "text-amber-600" : "text-gray-400"}`}>{formatCurrency(tx.amount)}</span>
                     </div>
                   ))}
@@ -987,6 +1037,27 @@ export default function GroupDetailPage() {
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Note (optional)</label>
                   <input type="text" value={contributionNote} onChange={(e) => setContributionNote(e.target.value)} placeholder="e.g. EFT reference, payment method" className="input-field text-sm" />
+                </div>
+
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Receipt (optional)</label>
+                  <label className="flex items-center gap-2 p-3 border border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-kasi-green hover:bg-kasi-green/5 transition-colors">
+                    <Receipt className="w-4 h-4 text-gray-400" />
+                    <span className="text-sm text-gray-500 flex-1">
+                      {receiptFile ? receiptFile.name : "Attach proof of payment"}
+                    </span>
+                    {receiptFile && (
+                      <button type="button" onClick={(e) => { e.preventDefault(); setReceiptFile(null); }} className="text-gray-400 hover:text-red-500">
+                        <XCircle className="w-4 h-4" />
+                      </button>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
 
                 <button onClick={handleContribute} disabled={contributionSubmitting || (isGoal && !contributionAmount)} className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-60">
