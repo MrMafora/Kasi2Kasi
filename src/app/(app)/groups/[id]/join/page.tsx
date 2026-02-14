@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Users, ArrowLeft, CheckCircle, XCircle, UserPlus, Calendar, Coins } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getGroupPublicInfo, joinGroup, notifyGroupMembers } from "@/lib/database";
+import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/types";
 import LoadingSpinner from "@/components/LoadingSpinner";
 
@@ -47,7 +48,42 @@ export default function JoinGroupPage() {
         if (!user || !group) return;
         setJoining(true);
         setError("");
+
         try {
+            const supabase = createClient();
+            
+            // 1. AGGRESSIVE REPAIR: Force create profile if missing
+            // We do this BEFORE trying to join, to ensure FK constraint is met.
+            const { data: profileCheck } = await supabase
+                .from("profiles")
+                .select("id")
+                .eq("id", user.id)
+                .maybeSingle();
+
+            if (!profileCheck) {
+                console.log("Repairing profile for:", user.id);
+                const name = user.user_metadata?.name || "Member";
+                const { error: repairError } = await supabase.from("profiles").insert({
+                    id: user.id,
+                    name: name,
+                    email: user.email,
+                    phone: user.user_metadata?.phone || "",
+                    avatar_initials: name.substring(0, 2).toUpperCase()
+                });
+                
+                if (repairError) {
+                    console.error("Repair failed:", repairError);
+                    // We don't return here, we let it try to join anyway, 
+                    // but we log the specific error which might be RLS related.
+                    if (repairError.message.includes("policy")) {
+                         setError("Account permission error. Please contact support.");
+                         setJoining(false);
+                         return;
+                    }
+                }
+            }
+
+            // 2. Proceed with Join
             const { error: joinError } = await joinGroup(group.id, user.id);
             if (joinError) {
                 if (joinError.message?.includes("already a member")) {
@@ -282,6 +318,15 @@ export default function JoinGroupPage() {
                       : `By joining, you agree to contribute ${formatCurrency(group.contribution_amount)} ${group.frequency} and follow the group's constitution rules.`
                     }
                 </p>
+
+                {/* DEBUG INFO */}
+                <div className="mt-8 p-4 bg-gray-50 rounded-xl text-xs text-gray-400 font-mono break-all">
+                    <p className="font-bold text-gray-500 mb-1">DEBUG INFO:</p>
+                    <p>User ID: {user?.id || "Not logged in"}</p>
+                    <p>Email: {user?.email || "N/A"}</p>
+                    <p>Profile ID: {profile?.id || "MISSING"}</p>
+                    <p>Profile Name: {profile?.name || "MISSING"}</p>
+                </div>
             </div>
         </div>
     );

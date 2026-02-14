@@ -2,13 +2,23 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff, ArrowRight, AlertCircle, ArrowLeft, Users, CheckCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import LoadingSpinner from "@/components/LoadingSpinner";
 
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner message="Loading..." /></div>}>
+      <RegisterContent />
+    </Suspense>
+  );
+}
+
+function RegisterContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { signUp } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [step, setStep] = useState(1);
@@ -21,6 +31,8 @@ export default function RegisterPage() {
     password: "",
     beneficiary: "",
   });
+
+  const redirect = searchParams.get("redirect") || "/dashboard";
 
   // Password strength
   const hasLength = formData.password.length >= 8;
@@ -66,7 +78,7 @@ export default function RegisterPage() {
           } catch (err) {
             console.error("Failed to send welcome email:", err);
           }
-          router.push("/dashboard");
+          router.push(redirect);
         }
       } catch (err: any) {
         setError("Something went wrong. Please try again.");

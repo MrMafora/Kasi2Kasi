@@ -71,7 +71,7 @@ export default function DashboardPage() {
     }
   };
 
-  const firstName = profile?.name?.split(" ")[0] || "there";
+  const firstName = profile?.name?.split(" ")[0] || user?.user_metadata?.name?.split(" ")[0] || "there";
 
   if (authLoading || loading) {
     return (

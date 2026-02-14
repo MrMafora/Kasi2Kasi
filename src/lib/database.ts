@@ -400,6 +400,35 @@ export async function getGroupPublicInfo(groupId: string): Promise<{
 export async function joinGroup(groupId: string, userId: string): Promise<{ error: any }> {
   const supabase = getSupabase();
 
+  // 1. Ensure Profile Exists (Self-Healing)
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (!profile) {
+    // Fetch auth metadata to recreate profile
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const name = user.user_metadata?.name || "New Member";
+      const initials = name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
+      
+      const { error: createError } = await supabase.from("profiles").insert({
+        id: userId,
+        name: name,
+        email: user.email,
+        phone: user.user_metadata?.phone || "",
+        avatar_initials: initials
+      });
+      
+      if (createError) {
+        console.error("Failed to auto-create missing profile:", createError);
+        // Continue anyway - if DB trigger fixed it in background, next insert might still work
+      }
+    }
+  }
+
   // Check if already a member
   const { data: existing } = await supabase
     .from("group_members")

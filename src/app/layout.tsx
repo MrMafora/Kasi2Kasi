@@ -16,8 +16,30 @@ export const metadata: Metadata = {
   description: "Secure, transparent digital Stokvel management for the Kasi community. Track contributions, manage payouts, and build trust.",
   manifest: "/manifest.json",
   icons: {
-    icon: "/favicon.ico",
+    icon: "/icons/logo.png",
     apple: "/icons/icon-192.png",
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_ZA",
+    url: "https://kasi2kasi.co.za",
+    siteName: "Kasi2Kasi",
+    title: "Kasi2Kasi - Digital Stokvel Management",
+    description: "Secure, transparent digital Stokvel management. Join the movement towards financial freedom.",
+    images: [
+      {
+        url: "/og-image.jpg",
+        width: 1200,
+        height: 630,
+        alt: "Kasi2Kasi - Community Savings",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Kasi2Kasi - Digital Stokvel Management",
+    description: "Secure, transparent digital Stokvel management. Join the movement towards financial freedom.",
+    images: ["/og-image.jpg"],
   },
 };
 

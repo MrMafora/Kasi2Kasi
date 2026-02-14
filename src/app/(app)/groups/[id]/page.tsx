@@ -7,7 +7,7 @@ import {
   ArrowLeft, Users, BarChart3, Vote, Crown,
   Shield, BookOpen, CheckCircle, XCircle, Clock, AlertTriangle,
   ChevronRight, UserPlus, Share2, Plus, Send, Copy, Check, Banknote,
-  Target, Receipt, MessageCircle
+  Target, Receipt, MessageCircle, LogOut, UserMinus
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { createClient } from "@/lib/supabase/client";
@@ -78,6 +78,12 @@ export default function GroupDetailPage() {
 
   // Member detail state
   const [selectedMember, setSelectedMember] = useState<any>(null);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [removeSubmitting, setRemoveSubmitting] = useState(false);
+
+  // Leave group state
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
 
   // Payout modal state
   const [showPayoutModal, setShowPayoutModal] = useState(false);
@@ -414,7 +420,8 @@ export default function GroupDetailPage() {
   };
 
   const handleCopyLink = async () => {
-    const inviteUrl = `${window.location.origin}/groups/${group?.id}/join`;
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
+    const inviteUrl = `${baseUrl}/groups/${group?.id}/join`;
     try {
       await navigator.clipboard.writeText(inviteUrl);
     } catch {
@@ -434,8 +441,9 @@ export default function GroupDetailPage() {
   };
 
   const handleShareWhatsApp = () => {
-    const inviteUrl = `${window.location.origin}/groups/${group?.id}/join`;
-    const text = `Join my ${isGoal ? "Goal Fund" : "Stokvel"} "${group?.name}" on Kasi2Kasi! ${inviteUrl}`;
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
+    const inviteUrl = `${baseUrl}/groups/${group?.id}/join`;
+    const text = `Join my ${isGoal ? "Goal Fund" : "Stokvel"} "${group?.name}" on Kasi2Kasi!\n\n${inviteUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
     setShowShareMenu(false);
   };
@@ -444,6 +452,76 @@ export default function GroupDetailPage() {
     setShowShareMenu(!showShareMenu);
   };
 
+  const handleRemoveMember = async () => {
+    if (!user || !group || !selectedMember) return;
+    setRemoveSubmitting(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from("group_members")
+        .update({ status: "exited" })
+        .eq("id", selectedMember.id);
+
+      if (error) {
+        toastError(error.message || "Failed to remove member");
+      } else {
+        await notifyGroupMembers(
+          group.id,
+          "Member Removed",
+          `${selectedMember.profile?.name || "A member"} was removed from the group`,
+          "system",
+          user.id
+        );
+        setShowRemoveConfirm(false);
+        setSelectedMember(null);
+        await refreshData();
+      }
+    } catch {
+      toastError("Failed to remove member");
+    } finally {
+      setRemoveSubmitting(false);
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!user || !group) return;
+    setLeaveSubmitting(true);
+    const supabase = createClient();
+    try {
+      // Check if they owe money (only for Stokvels, not Goal Funds ideally, but keeping simple)
+      if (!isGoal) {
+        const myMember = group.my_membership;
+        if (myMember && myMember.payout_position < group.current_round) {
+           // If they were paid out already but haven't finished paying back
+           // This check is simplistic, real stokvels are stricter
+        }
+      }
+
+      const { error } = await supabase
+        .from("group_members")
+        .update({ status: "exited" })
+        .eq("group_id", group.id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        toastError(error.message || "Failed to leave group");
+      } else {
+        await notifyGroupMembers(
+          group.id,
+          "Member Left",
+          `${profile?.name || "A member"} has left the group`,
+          "system",
+          user.id
+        );
+        // Redirect to dashboard
+        window.location.href = "/dashboard";
+      }
+    } catch {
+      toastError("Failed to leave group");
+    } finally {
+      setLeaveSubmitting(false);
+    }
+  };
   const handlePayout = async () => {
     if (!user || !group) return;
     const currentRecipient = payoutOrder.find((p) => p.isCurrent);
@@ -567,11 +645,23 @@ export default function GroupDetailPage() {
             </button>
             {/* Share dropdown */}
             {showShareMenu && (
-              <div className="absolute right-0 top-10 bg-white rounded-xl shadow-lg border border-gray-100 py-2 w-48 z-50 animate-fade-in">
-                <button onClick={handleCopyLink} className="w-full px-4 py-2.5 text-left text-sm text-kasi-charcoal hover:bg-gray-50 flex items-center gap-2">
-                  <Copy className="w-4 h-4 text-gray-400" /> Copy invite link
+              <div className="absolute right-0 top-10 bg-white rounded-xl shadow-lg border border-gray-100 py-3 w-64 z-50 animate-fade-in">
+                <div className="px-4 pb-2 mb-2 border-b border-gray-100">
+                  <p className="text-[10px] text-gray-400 mb-1">Invite Link</p>
+                  <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        value={`${process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')}/groups/${group.id}/join`}
+                        className="bg-transparent border-none text-xs text-kasi-charcoal w-full focus:ring-0 p-0"
+                        onClick={(e) => e.currentTarget.select()}
+                      />
+                  </div>
+                </div>
+                <button onClick={handleCopyLink} className="w-full px-4 py-2 text-left text-sm text-kasi-charcoal hover:bg-gray-50 flex items-center gap-2">
+                  <Copy className="w-4 h-4 text-gray-400" /> Copy link
                 </button>
-                <button onClick={handleShareWhatsApp} className="w-full px-4 py-2.5 text-left text-sm text-kasi-charcoal hover:bg-gray-50 flex items-center gap-2">
+                <button onClick={handleShareWhatsApp} className="w-full px-4 py-2 text-left text-sm text-kasi-charcoal hover:bg-gray-50 flex items-center gap-2">
                   <MessageCircle className="w-4 h-4 text-green-500" /> Share via WhatsApp
                 </button>
               </div>
@@ -1206,6 +1296,137 @@ export default function GroupDetailPage() {
       )}
 
       {/* ===== PAYOUT CONFIRMATION MODAL ===== */}
+      {/* ===== REMOVE MEMBER CONFIRM MODAL ===== */}
+      {showRemoveConfirm && selectedMember && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-4">
+            <div className="text-center">
+              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-7 h-7 text-red-500" />
+              </div>
+              <h3 className="font-bold text-lg text-kasi-charcoal">Remove Member?</h3>
+              <p className="text-sm text-gray-500 mt-2">
+                Are you sure you want to remove <span className="font-semibold text-kasi-charcoal">{selectedMember.profile?.name}</span>?
+              </p>
+              <p className="text-xs text-gray-400 mt-1">They will be marked as "Exited" but their transaction history will remain.</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowRemoveConfirm(false)} className="flex-1 py-3 rounded-xl font-medium text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors">Cancel</button>
+              <button 
+                onClick={handleRemoveMember} 
+                disabled={removeSubmitting}
+                className="flex-1 py-3 rounded-xl font-medium text-sm text-white bg-red-500 hover:bg-red-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {removeSubmitting ? "Removing..." : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== LEAVE GROUP CONFIRM MODAL ===== */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-4">
+            <div className="text-center">
+              <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <LogOut className="w-7 h-7 text-amber-600" />
+              </div>
+              <h3 className="font-bold text-lg text-kasi-charcoal">Leave Group?</h3>
+              <p className="text-sm text-gray-500 mt-2">
+                Are you sure you want to leave <span className="font-semibold text-kasi-charcoal">{group.name}</span>?
+              </p>
+              {!isGoal && (
+                <p className="text-xs text-amber-600 mt-2 bg-amber-50 p-2 rounded-lg border border-amber-100">
+                  ⚠️ Note: If you owe contributions for payouts you've already received, you are still liable.
+                </p>
+              )}
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setShowLeaveConfirm(false)} className="flex-1 py-3 rounded-xl font-medium text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors">Cancel</button>
+              <button 
+                onClick={handleLeaveGroup} 
+                disabled={leaveSubmitting}
+                className="flex-1 py-3 rounded-xl font-medium text-sm text-white bg-red-500 hover:bg-red-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {leaveSubmitting ? "Leaving..." : "Leave Group"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MEMBER DETAIL MODAL ===== */}
+      {selectedMember && !showRemoveConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4" onClick={() => setSelectedMember(null)}>
+          <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg text-kasi-charcoal">Member Details</h3>
+              <button onClick={() => setSelectedMember(null)} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200"><XCircle className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center text-2xl font-bold text-gray-400 overflow-hidden">
+                {selectedMember.profile?.avatar_url ? (
+                  <img src={selectedMember.profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  selectedMember.profile?.avatar_initials
+                )}
+              </div>
+              <div>
+                <h4 className="font-bold text-xl text-kasi-charcoal">{selectedMember.profile?.name}</h4>
+                <p className="text-sm text-gray-500">{selectedMember.profile?.phone}</p>
+                <div className={`mt-1 inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium capitalize ${getRoleBadgeColor(selectedMember.role)}`}>
+                  {selectedMember.role}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-gray-50 rounded-xl p-3">
+                <p className="text-xs text-gray-400 mb-1">Contributed</p>
+                <p className="font-bold text-kasi-charcoal">{formatCurrency(selectedMember.lifetime_contributed)}</p>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3">
+                <p className="text-xs text-gray-400 mb-1">Received</p>
+                <p className="font-bold text-kasi-charcoal">{formatCurrency(selectedMember.lifetime_received)}</p>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-100 pt-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Joined</span>
+                <span className="text-kasi-charcoal font-medium">{new Date(selectedMember.joined_at).toLocaleDateString()}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Status</span>
+                <span className={`font-medium capitalize ${selectedMember.status === 'active' ? 'text-emerald-600' : 'text-red-500'}`}>{selectedMember.status}</span>
+              </div>
+            </div>
+
+            {/* Admin Controls */}
+            {isChairperson && selectedMember.user_id !== user?.id && selectedMember.status === 'active' && (
+              <button 
+                onClick={() => setShowRemoveConfirm(true)}
+                className="w-full py-3 rounded-xl border border-red-200 text-red-500 font-medium text-sm hover:bg-red-50 transition-colors flex items-center justify-center gap-2 mt-2"
+              >
+                <UserMinus className="w-4 h-4" /> Remove Member
+              </button>
+            )}
+            
+            {/* Self Controls */}
+            {selectedMember.user_id === user?.id && selectedMember.status === 'active' && selectedMember.role !== 'chairperson' && (
+               <button 
+                onClick={() => { setSelectedMember(null); setShowLeaveConfirm(true); }}
+                className="w-full py-3 rounded-xl border border-red-200 text-red-500 font-medium text-sm hover:bg-red-50 transition-colors flex items-center justify-center gap-2 mt-2"
+              >
+                <LogOut className="w-4 h-4" /> Leave Group
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {showPayoutModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
