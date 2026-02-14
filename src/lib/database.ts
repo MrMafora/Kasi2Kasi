@@ -631,3 +631,43 @@ export async function notifyGroupMembers(
     await supabase.from("notifications").insert(notifications);
   }
 }
+
+// ============ MEMBER MANAGEMENT ============
+
+export async function removeMember(groupId: string, memberId: string, currentUserId: string): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  // Verify caller is chairperson
+  const { data: caller } = await supabase
+    .from("group_members")
+    .select("role")
+    .eq("group_id", groupId)
+    .eq("user_id", currentUserId)
+    .eq("status", "active")
+    .single();
+
+  if (!caller || caller.role !== "chairperson") {
+    return { error: { message: "Only the chairperson can remove members" } };
+  }
+
+  // Soft delete by updating status
+  const { error } = await supabase
+    .from("group_members")
+    .update({ status: "exited" })
+    .eq("id", memberId)
+    .eq("group_id", groupId);
+
+  return { error };
+}
+
+export async function leaveGroup(groupId: string, userId: string): Promise<{ error: any }> {
+  const supabase = getSupabase();
+
+  const { error } = await supabase
+    .from("group_members")
+    .update({ status: "exited" })
+    .eq("group_id", groupId)
+    .eq("user_id", userId);
+
+  return { error };
+}
